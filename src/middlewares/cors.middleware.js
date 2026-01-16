@@ -3,7 +3,7 @@ require("dotenv").config();
 
 const allowedOrigins =
   process.env.NODE_ENV === "production"
-    ? "https://tech-expo-frontend.vercel.app"
+    ? "https://www.techexpo.site"
     : "http://localhost:3000";
 
 module.exports = cors({
