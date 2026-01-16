@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Certificate — Congratulations</title>
+  <style>
+    /* Basic reset for some clients */
+    body,table,td,a{ -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table,td{ mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img{ -ms-interpolation-mode:bicubic; }
+    img{ border:0; height:auto; line-height:100%; outline:none; text-decoration:none; display:block; }
+    a { text-decoration: none; }
+  </style>
+</head>
+<body style="margin:0; padding:20px; background-color:#f3f7ff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+
+  <!-- Outer wrapper (centering) -->
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%; max-width:100%; margin:0 auto;">
+    <tr>
+      <td align="center">
+
+        <!-- Card container -->
+        <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="width:100%; max-width:600px; background-color:#ffffff; border-radius:12px; overflow:hidden; border:1px solid #e6eefb; box-shadow:0 10px 30px rgba(15,41,77,0.06);">
+          
+          <tr>
+            <td align="center" style="background-color:#2563eb; padding:28px 20px; text-align:center;">
+              <img src="https://cdn.discordapp.com/attachments/908184599446835250/1413338159953084476/logo.png?ex=68bb913b&is=68ba3fbb&hm=ec4b820eb80d0b5c669b0cdf55f3914a4ff9e63efb4a533d81844d42569444f0&" alt="Logo" width="120" style="display:block; margin:0 auto 12px; max-width:120px; height:auto;" />
+              <h1 style="margin:0; font-size:22px; font-weight:700; color:#ffffff; line-height:1.2;">🎓 Congratulations!</h1>
+              <p style="margin:8px 0 0; color:#e6f0ff; font-size:14px;">Your certificate is ready</p>
+            </td>
+          </tr>
+
+
+          <tr>
+            <td style="padding:28px 30px; color:#0f172a;">
+              <p style="margin:0 0 14px; font-size:16px;">Hello <strong style="color:#0f172a;">{{firstName}}</strong>,</p>
+
+              <p style="margin:0 0 18px; font-size:15px; color:#374151;">
+                We’re excited to present your official certificate for
+                <strong style="color:#0f172a;">TechnoMaze V2</strong>. This certificate recognizes your achievement and commitment.
+              </p>
+
+              <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:20px auto;">
+                <tr>
+                  <td align="center" style="border-radius:8px; background-color:#1e40af;">
+                    <a href="{{certificateUrl}}" target="_blank" style="display:inline-block; padding:12px 28px; font-weight:600; color:#ffffff; font-size:15px; border-radius:8px;">View &amp; Download Certificate</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:18px 0 0; font-size:13px; color:#6b7280;">
+                Can’t click the button? Copy and paste this link into your browser:
+              </p>
+              <p style="margin:8px 0 0; font-family: 'Courier New', Courier, monospace; font-size:13px; color:#2563eb; word-break:break-all;">
+                {{certificateUrl}}
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 30px 18px;">
+              <div style="height:1px; background:#eef6ff; width:100%;"></div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:20px 30px 30px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:#f8fbff; border:1px solid #dfefff; border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 16px; font-size:14px; color:#0f172a;">
+                    <strong>Recipient:</strong> <span style="color:#0f172a;">{{firstName}} {{lastName}}</span><br />
+                    <strong>Certificate:</strong> <span style="color:#0f172a;">TechnoMaze V2</span><br />
+                    <strong>Date Issued:</strong> <span style="color:#0f172a;">{{issueDate}}</span><br />
+                    <strong>Credienital ID:</strong> <span style="color:#0f172a;">{{credienitalId}}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 30px 28px; color:#6b7280; font-size:13px;">
+              <p style="margin:0;">
+                Keep this certificate safe — you can always re-download it from your account or use the link above.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#fbfdff; padding:18px 30px 28px; text-align:center; border-top:1px solid #eef4ff;">
+              <p style="margin:0; font-size:13px; color:#6b7280;">This email was sent to <strong style="color:#0f172a;">{{email}}</strong></p>
+              <p style="margin:10px 0 0; font-size:12px; color:#2563eb;">© 2024 Tech Expo. All rights reserved.</p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>
