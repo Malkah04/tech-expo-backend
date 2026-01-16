@@ -31,7 +31,7 @@ app.use(
       maxAge: 24 * 60 * 60 * 1000, // 1 day
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     },
-  })
+  }),
 );
 
 const passport = require("./config/passport.config");
