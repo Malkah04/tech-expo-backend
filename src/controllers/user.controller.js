@@ -226,7 +226,7 @@ const loginUser = async (req, res) => {
       [isEmail ? "email" : "username"]: identifier.toLowerCase(),
     }).select("+password");
 
-    if (!user) {
+    if (!user || !user.password) {
       return res
         .status(200)
         .json({ error: "Invalid email, username or password" });
