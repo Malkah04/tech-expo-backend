@@ -17,7 +17,10 @@ async function getGithubEmails(accessToken) {
 }
 
 const host =
-  process.env.NODE_ENV === "production" ? "" : "http://localhost:3030";
+  process.env.NODE_ENV === "development"
+    ? process.env.LOCAL_ORIGIN
+    : process.env.CLIENT_ORIGIN;
+
 
 const generateUsername = async (name) => {
   let baseName = name.replace(/\s+/g, "").toLowerCase();
