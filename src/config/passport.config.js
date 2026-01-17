@@ -15,12 +15,8 @@ async function getGithubEmails(accessToken) {
   const primaryEmail = data.find((e) => e.primary && e.verified);
   return primaryEmail ? primaryEmail.email : null;
 }
-
 const host =
-  process.env.NODE_ENV === "development"
-    ? process.env.LOCAL_ORIGIN
-    : process.env.CLIENT_ORIGIN;
-
+  process.env.NODE_ENV === "production" ? "" : "http://localhost:3030";
 
 const generateUsername = async (name) => {
   let baseName = name.replace(/\s+/g, "").toLowerCase();
