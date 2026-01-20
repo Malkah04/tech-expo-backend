@@ -10,6 +10,27 @@ const host = require("../utils/host");
 const Certificate = require("../models/certificate.model");
 const mongoose = require("mongoose");
 const Session = require("../models/session.model");
+const { pgClient } = require("../config/db.config.pg");
+
+function generateVerificationToken() {
+  const token = crypto.randomBytes(20).toString("hex");
+  const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+  const expires = new Date(Date.now() + 30 * 60 * 1000);
+  return { token, hashedToken, expires };
+}
+
+function getResetPasswordToken() {
+  const resetToken = crypto.randomBytes(20).toString("hex");
+
+  const hashedToken = crypto
+    .createHash("sha256")
+    .update(resetToken)
+    .digest("hex");
+
+  const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  return { resetToken, hashedToken, expires };
+}
 
 const registerUser = async (req, res) => {
   const schema = z.object({
@@ -50,63 +71,85 @@ const registerUser = async (req, res) => {
   const normalizedUsername = username.toLowerCase();
 
   try {
-    const [existingEmail, existingUsername] = await Promise.all([
-      User.findOne({ email: normalizedEmail }),
-      User.findOne({ username: normalizedUsername }),
-    ]);
+    const checkQuery = `select * from users where email=$1 or username =$2`;
+    const checkValue = [normalizedEmail, normalizedUsername];
 
-    if (existingEmail)
+    const checkRes = await pgClient.query(checkQuery, checkValue);
+    if (checkRes.rows.some((u) => u.email === normalizedEmail))
       return res.status(400).json({ error: "Email already in use" });
-    if (existingUsername)
+    if (checkRes.rows.some((u) => username === normalizedUsername))
       return res.status(400).json({ error: "Username already taken" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const newUser = new User({
+    const { token, hashedToken, expires } = generateVerificationToken();
+
+    const insertQuery = `
+    insert into users(
+      first_name,
+      last_name,
+      username,
+      email,
+      password,
+      phone,
+      birth_date,
+      grade,
+      school,
+      interests,
+      agree_to_terms,
+      subscribe_newsletter,
+      validate_before_login,
+      verification_token,
+      verification_expires,
+      last_email_sent
+    ) 
+    values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    returning *`;
+
+    const insertValues = [
       firstName,
       lastName,
-      username: normalizedUsername,
-      email: normalizedEmail,
-      password: hashedPassword,
+      normalizedUsername,
+      normalizedEmail,
+      hashedPassword,
       phone,
       birthDate,
       grade,
       school,
-      interests,
-      agreeToTerms: true,
-      subscribeNewsletter,
-      validateBeforeLogin: false,
-      lastEmailSent: Date.now(),
-    });
+      JSON.stringify(interests || []),
+      true,
+      subscribeNewsletter || false,
+      false,
+      hashedToken,
+      expires,
+      new Date(),
+    ];
 
-    const verificationToken = newUser.getVerificationToken();
-    newUser.verificationToken = verificationToken;
-    newUser.verificationExpires = Date.now() + 30 * 60 * 1000;
+    const result = await pgClient.query(insertQuery, insertValues);
+    const newUser = result.rows[0];
 
-    await newUser.save();
-
-    const validationUrl = `${host}/verify?token=${verificationToken}`;
+    const validationUrl = `${host}/verify?token=${token}`;
     await sendMail(
       newUser.email,
       "Verify your email",
       loadTemplate("verification.html", {
-        firstName: newUser.firstName,
+        firstName: newUser.first_name,
         email: newUser.email,
         validationUrl,
-      })
+      }),
     );
 
-    const session = await initializeSession(newUser._id, false);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    const session = await initializeSession(newUser.id, false);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
 
-    res.cookie("sessionToken", session.sessionToken, {
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: true,
       sameSite: "none",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: true,
       sameSite: "none",
@@ -116,7 +159,7 @@ const registerUser = async (req, res) => {
     res.status(201).json({
       message: "User registered successfully, please verify your email.",
       csrfToken: session.csrfToken,
-      validationBeforeLogin: newUser.validateBeforeLogin,
+      validationBeforeLogin: newUser.validate_before_login,
       email: newUser.email,
     });
   } catch (error) {
@@ -128,7 +171,11 @@ const registerUser = async (req, res) => {
 const emailCheck = async (req, res) => {
   const { email } = req.body;
 
-  const exist = await User.findOne({ email });
+  const result = await pgClient.query("select * from users where email = $1 ", [
+    email,
+  ]);
+  const exist = result.rows[0];
+
   if (exist) {
     return res.status(200).json({ error: "Email already in use" });
   } else {
@@ -139,7 +186,12 @@ const emailCheck = async (req, res) => {
 const usernameCheck = async (req, res) => {
   const { username } = req.body;
 
-  const exist = await User.findOne({ username });
+  const result = await pgClient.query(
+    "select * from users where username = $1  ",
+    [username],
+  );
+  const exist = result.rows[0];
+
   if (exist) {
     return res.status(200).json({ error: "Username already in use" });
   } else {
@@ -155,10 +207,16 @@ const addEmail = async (req, res) => {
   }
 
   try {
-    const emailDoc = await User.findOne({ email });
-    const providerDoc = await User.findOne({
-      "providers.providerId": providerId,
-    });
+    const result = await pgClient("select * from users where email = $1 ", [
+      email,
+    ]);
+    const emailDoc = result.rows[0];
+    const providerRes = await pgClient(
+      "select * from users where providers @> $1 limit 1 ",
+      [JSON.stringify([{ providerId }])],
+    );
+
+    const providerDoc = providerRes.rows[0];
 
     if (!emailDoc && !providerDoc) {
       return res.status(400).json({
@@ -168,12 +226,12 @@ const addEmail = async (req, res) => {
 
     if (emailDoc) {
       const hasProvider = emailDoc.providers.some(
-        (p) => p.providerId === providerId && p.provider === provider
+        (p) => p.providerId === providerId && p.provider === provider,
       );
 
       if (!hasProvider && providerDoc) {
         const providerData = providerDoc.providers.find(
-          (p) => p.providerId === providerId
+          (p) => p.providerId === providerId,
         );
 
         if (providerData) {
@@ -181,14 +239,20 @@ const addEmail = async (req, res) => {
         }
       }
 
-      emailDoc.isVerified = false;
-      await emailDoc.save();
+      await pgClient.query("update users set providers =$1 where id=$2", [
+        JSON.stringify(emailDoc.providers),
+        emailDoc.id,
+      ]);
 
-      if (
-        providerDoc &&
-        providerDoc._id.toString() !== emailDoc._id.toString()
-      ) {
-        await User.findByIdAndDelete(providerDoc._id);
+      await pgClient.query(
+        "update users set is_verified = false WHERE id = $1",
+        [emailDoc.id],
+      );
+
+      if (providerDoc && providerDoc.id !== emailDoc.id) {
+        await pgClient.query("delete from users where id :$1", [
+          providerDoc.id,
+        ]);
       }
 
       return res.status(200).json({
@@ -196,9 +260,10 @@ const addEmail = async (req, res) => {
       });
     }
 
-    providerDoc.email = email;
-    providerDoc.isVerified = false;
-    await providerDoc.save();
+    await pgClient.query(
+      "update users set email = $1, is_verified = false where id = $2",
+      [email, providerDoc.id],
+    );
 
     return res.status(200).json({
       message: "Email added to provider account successfully",
@@ -221,10 +286,16 @@ const loginUser = async (req, res) => {
 
   try {
     const isEmail = /\S+@\S+\.\S+/.test(identifier);
+    const column = isEmail ? "email" : "username";
 
-    const user = await User.findOne({
-      [isEmail ? "email" : "username"]: identifier.toLowerCase(),
-    }).select("+password");
+    const identifierLower = identifier.toLowerCase();
+
+    const result = await pgClient.query(
+      `SELECT * FROM users WHERE ${column} = $1 LIMIT 1`,
+      [identifierLower],
+    );
+
+    const user = result.rows[0];
 
     if (!user || !user.password) {
       return res
@@ -239,17 +310,17 @@ const loginUser = async (req, res) => {
         .json({ error: "Invalid email, username or password" });
     }
 
-    const session = await initializeSession(user._id, rememberMe);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    const session = await initializeSession(user.id, rememberMe);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
 
-    res.cookie("sessionToken", session.sessionToken, {
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: true,
       sameSite: "none",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: true,
       sameSite: "none",
@@ -258,7 +329,7 @@ const loginUser = async (req, res) => {
 
     res.status(200).json({
       message: "Login successful",
-      csrfToken: session.csrfToken,
+      csrfToken: session.csrf_token,
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -267,36 +338,56 @@ const loginUser = async (req, res) => {
 };
 
 const verifyEmail = async (req, res) => {
-  const { token } = req.query;
+  let { token } = req.query;
+  const rtoken = decodeURIComponent(token).trim();
+
+  const hashedToken = crypto.createHash("sha256").update(rtoken).digest("hex");
 
   try {
-    const user = await User.findOne({
-      verificationToken: token,
-      verificationExpires: { $gt: Date.now() },
-    });
+    const result = await pgClient.query(
+      "select * from users where verification_token =$1 and verification_expires >= NOW() ",
+      [hashedToken],
+    );
+    const user = result.rows[0];
 
     if (!user) {
+      console.log(hashedToken);
+
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
-    user.isVerified = true;
-    user.verificationToken = undefined;
-    user.verificationExpires = undefined;
-    user.validateBeforeLogin = true;
-    await user.save();
+    if (user.is_verified) {
+      return res.status(200).json({ message: "Email already verified" });
+    }
 
-    await Session.deleteMany({ userId: user._id });
-    const session = await initializeSession(user._id, true);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    await pgClient.query(
+      `
+      update users set 
+      is_verified = true ,
+      validate_before_login =true , 
+      verification_token =NULL ,
+      verification_expires =NULL 
+      where id =$1 
+      `,
+      [user.id],
+    );
 
-    res.cookie("sessionToken", session.sessionToken, {
+    await pgClient.query(
+      `UPDATE sessions SET status='expired' WHERE user_id=$1`,
+      [user.id],
+    );
+
+    const session = await initializeSession(user.id, true);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
+
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
@@ -313,37 +404,62 @@ const resendEmail = async (req, res) => {
   const { email } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const result = await pgClient.query(
+      "select * from users where email = $1 ",
+      [email],
+    );
+    const user = result.rows[0];
 
-    if (!user || user.isVerified) {
+    if (!user || user.is_verified) {
       return res.status(200).json({
         message: "User already verified!",
       });
     }
-    if (user.lastEmailSent && Date.now() - user.lastEmailSent < 60) {
+    if (user.last_email_sent && Date.now() - user.last_email_sent < 60 * 1000) {
       return res
         .status(429)
         .json({ error: "Please wait before requesting again" });
     }
 
-    const verificationToken = user.getVerificationToken();
-    user.verificationToken = verificationToken;
-    user.verificationExpires = Date.now() + 30 * 60 * 1000;
-    user.lastEmailSent = Date.now();
+    const { token, hashedToken, expires } = generateVerificationToken();
 
-    const validationUrl = `${host}/verify?token=${verificationToken}`;
+    const ress = await pgClient.query(
+      `
+      update users set verification_token =$1 , verification_expires =$2 ,last_email_sent =$3
+      where id = $4
+      `,
+      [hashedToken, expires, new Date(), user.id],
+    );
+
+    const validationUrl = `${host}/verify?token=${token}`;
     await sendMail(
       user.email,
       "Verify your email",
       loadTemplate("verification.html", {
-        firstName: user.firstName,
+        firstName: user.first_name,
         email: user.email,
         validationUrl,
       }),
-      validationUrl
+      validationUrl,
     );
 
-    await user.save();
+    const session = await initializeSession(user.id, true);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
+
+    res.cookie("sessionToken", session.session_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: expiresInMs,
+    });
+
+    res.cookie("csrfToken", session.csrf_token, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: expiresInMs,
+    });
+
     res.status(200).json({
       message: "Email Verification sent",
     });
@@ -357,14 +473,23 @@ const forgotPassword = async (req, res) => {
   const { email } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const result = await pgClient.query(
+      "select * from users where email = $1 ",
+      [email],
+    );
+    const user = result.rows[0];
 
     if (!user) {
       return res.status(200).json({ error: "User not found" });
     }
 
-    const resetToken = user.getResetPasswordToken();
-    await user.save({ validateBeforeSave: false });
+    const { resetToken, hashedToken, expires } = getResetPasswordToken();
+
+    await pgClient.query(
+      `
+      update users set reset_password_expires =$1 , reset_password_token =$2 , validateBeforeSave =false where id =$3`,
+      [expires, hashedToken, user.id],
+    );
 
     const resetUrl = `${host}/reset-password/${resetToken}`;
 
@@ -373,17 +498,20 @@ const forgotPassword = async (req, res) => {
         user.email,
         "Password Reset Request",
         loadTemplate("reset-password.html", {
-          firstName: user.firstName,
+          firstName: user.first_name,
           resetUrl,
           email: user.email,
-        })
+        }),
       );
 
       res.status(200).json({ message: "Email sent" });
     } catch (err) {
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpires = undefined;
-      await user.save({ validateBeforeSave: false });
+      await pgClient.query(
+        `
+      update users set reset_password_token =NULL, reset_password_expires =NULL , validateBeforeSave =false where id =$1`,
+        [user.id],
+      );
+
       console.error("Error sending email:", err);
       return res.status(500).json({ error: "Email could not be sent" });
     }
@@ -399,21 +527,27 @@ const resetPassword = async (req, res) => {
 
   try {
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    const now = new Date();
 
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpires: { $gt: Date.now() },
-    });
+    const userQ = await pgClient.query(
+      `
+      select * from users where reset_password_token =$1 ,reset_password_expires >$2 `,
+      [hashedToken, now],
+    );
+
+    const user = userQ.rows[0];
 
     if (!user) {
       return res.status(200).json({ error: "Invalid or expired token" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    user.password = hashedPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-    await user.save();
+
+    await pgClient.query(
+      `
+      update users set password =$1 ,reset_password_token =NULL,reset_password_expires=NULL where id =$2`,
+      [hashedPassword, user.id],
+    );
 
     res.status(200).json({ message: "Password reset successful" });
   } catch (error) {
@@ -423,13 +557,29 @@ const resetPassword = async (req, res) => {
 };
 
 const getMe = async (req, res) => {
-  const user = await User.findById(req.user.id).select("-password");
-  res.status(200).json(user);
+  try {
+    const userq = await pgClient.query(
+      `SELECT id, first_name, last_name, email, username, phone, birth_date, grade, school, interests, is_verified 
+      FROM users
+      WHERE id = $1`,
+      [req.user.id],
+    );
+    const user = userq.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.status(200).json(user);
+  } catch (err) {
+    console.error("Get me error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 };
 
 const fetchUsers = async (req, res) => {
   try {
-    const users = await User.find();
+    const userq = await pgClient.query(`
+      select * from users`);
+    const users = userq.rows;
     res.json(users);
   } catch (err) {
     console.error("Fetch Users Error:", err);
@@ -445,13 +595,21 @@ const changeRole = async (req, res) => {
   }
 
   try {
-    const user = await User.findById(userId);
+    const userq = await pgClient.query(
+      `
+      select * from users where id =$1`,
+      [userId],
+    );
+    const user = userq.rows[0];
     if (!user) {
       return res.status(200).json({ error: "User not found" });
     }
 
-    user.role = newRole;
-    await user.save();
+    await pgClient.query(
+      `
+      update users set role =$1`,
+      [newRole],
+    );
 
     res.status(200).json({ message: "User role updated successfully" });
   } catch (error) {
@@ -463,14 +621,33 @@ const changeRole = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   const { id } = req.user;
   try {
-    const user = await User.findByIdAndUpdate(id, req.body, {
-      new: true,
-      runValidators: true,
-    }).select("-password");
-    if (!user) {
+    const fields = Object.keys(req.body);
+    const values = Object.values(req.body);
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: "No fields to update." });
+    }
+
+    const setQuery = fields.map((f, i) => `${f} = $${i + 1}`).join(", ");
+
+    const result = await pgClient.query(
+      `UPDATE users 
+       SET ${setQuery} 
+       WHERE id = $${fields.length + 1} 
+       RETURNING id, first_name, last_name, email, username, phone, birth_date, grade, school, interests, is_verified`,
+      [...values, id],
+    );
+
+    const updatedUser = result.rows[0];
+
+    if (!updatedUser) {
       return res.status(404).json({ error: "User not found." });
     }
-    res.status(200).json({ message: "Profile updated successfully." });
+
+    res.status(200).json({
+      message: "Profile updated successfully.",
+      user: updatedUser,
+    });
   } catch (error) {
     console.error("Update profile error:", error);
     res.status(500).json({
@@ -485,24 +662,36 @@ const getUserCertificates = async (req, res) => {
   try {
     const { id } = req.user;
 
-    const user = await User.findById(id).select("certificates");
+    const userRes = await pgClient.query(
+      `
+      select * from users where id =$1`,
+      [id],
+    );
+
+    const user = userRes.rows[0];
+
     if (!user) {
       return res.status(404).json({ message: "User was not found" });
     }
 
-    if (!user.certificates || user.certificates.length === 0) {
+    const certificatesForUserRes = await pgClient.query(
+      `
+      select * from certificates where user_id =$1`,
+      [id],
+    );
+
+    const certificatesForUser = certificatesForUserRes.rows;
+
+    if (!certificatesForUser) {
       return res
         .status(200)
         .json({ message: "You don't own any certificates." });
     }
 
-    const certificates = await Certificate.find({
-      _id: { $in: user.certificates },
+    return res.status(200).json({
+      message: "Certificates fetched successfully",
+      certificatesForUser,
     });
-
-    return res
-      .status(200)
-      .json({ message: "Certificates fetched successfully", certificates });
   } catch (error) {
     console.error("Error fetching user certificates:", error);
     return res.status(500).json({ message: "Server error" });

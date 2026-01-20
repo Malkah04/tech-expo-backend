@@ -2,6 +2,7 @@ const EmailTemplate = require("../models/emails.model");
 const { loadCustomTemplate } = require("../utils/customTemplate");
 const User = require("../models/user.model");
 const sendMail = require("../utils/email");
+const { pgClient } = require("../config/db.config.pg");
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -9,10 +10,11 @@ function sleep(ms) {
     setTimeout(resolve, ms);
   });
 }
-
+// done
 async function getAllTemplates(req, res) {
   try {
-    const templates = await EmailTemplate.find();
+    const templateRes = await pgClient.query(`select * from emailTempletes`);
+    const templates = templateRes.rows;
     res.status(200).json(templates);
   } catch (error) {
     console.error("Error fetching email templates:", error);
@@ -20,10 +22,16 @@ async function getAllTemplates(req, res) {
   }
 }
 
+//done
+
 async function getTemplateById(req, res) {
   const { id } = req.params;
   try {
-    const template = await EmailTemplate.findById(id);
+    const templateRes = await pgClient.query(
+      `select * from emailTempletes where id = $1`,
+      [id],
+    );
+    const template = templateRes.row[0];
     if (!template) {
       return res.status(404).json({ error: "Template not found" });
     }
@@ -34,34 +42,36 @@ async function getTemplateById(req, res) {
   }
 }
 
+// done
 async function createTemplate(req, res) {
   const { name, html, subject, previewUrl, identity, description } = req.body;
   try {
-    const newTemplate = new EmailTemplate({
-      name,
-      html,
-      subject,
-      previewUrl,
-      identity,
-      description,
-    });
-    await newTemplate.save();
+    const emailTempRes = await pgClient.query(
+      `
+      insert into emailTempletes (name ,html ,subject ,preview_url ,identity ,description) values ($1 ,$2 ,$3 ,$4 ,$5 ,$6) returning *`,
+      [name, html, subject, previewUrl, identity, description],
+    );
+
+    const newTemplate = emailTempRes.rows[0];
+
     res.status(201).json(newTemplate);
   } catch (error) {
     console.error("Error creating email template:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
+// done
 async function updateTemplate(req, res) {
   const { id } = req.params;
   const { name, subject, html, previewUrl } = req.body;
   try {
-    const updatedTemplate = await EmailTemplate.findByIdAndUpdate(
-      id,
-      { name, html, subject, previewUrl },
-      { new: true }
+    const updateTempleteRes = await pgClient.query(
+      `
+      update emailTempletes set (name ,html ,subject ,preview_url) values ($1 ,$2 ,$3 ,$4) where id =$4 returning *`,
+      [name, html, subject, previewUrl, id],
     );
+    const updatedTemplate = updateTempleteRes.rows[0];
+
     if (!updatedTemplate) {
       return res.status(404).json({ error: "Template not found" });
     }
@@ -71,11 +81,16 @@ async function updateTemplate(req, res) {
     res.status(500).json({ error: "Internal server error" });
   }
 }
-
+// done
 async function deleteTemplate(req, res) {
   const { id } = req.params;
   try {
-    const deletedTemplate = await EmailTemplate.findByIdAndDelete(id);
+    const deleteTempRes = await pgClient.query(
+      `
+  delete from emailTempletes where id =$1 returning *`,
+      [id],
+    );
+    const deletedTemplate = deleteTempRes.rows[0];
     if (!deletedTemplate) {
       return res.status(404).json({ error: "Template not found" });
     }
@@ -94,20 +109,31 @@ async function sendEmail(req, res) {
     return res.status(401).json({ error: "Missing fields are required" });
   }
 
-  const existingTemplate = await EmailTemplate.findOne({ identity: template });
+  const existTempleteRes = await pgClient.query(
+    `
+    select * from emailTempletes where identity =$1`,
+    [template],
+  );
+
+  const existingTemplate = existTempleteRes.rows[0];
+
   if (!existingTemplate) {
     return res.status(401).json({ error: "This template does not exist" });
   }
 
-  const templateId = existingTemplate._id;
+  const templateId = existingTemplate.id;
   const subject = existingTemplate.subject;
 
   async function sendToList(emails, results) {
     for (const email of emails) {
-      const userExists = await User.findOne({ email });
+      const userRes = await pgClient.query(
+        `select * from users where email =$1`,
+        [email],
+      );
+      const userExists = userRes.rows[0];
       const variables = userExists
         ? {
-            firstName: userExists.firstName,
+            firstName: userExists.first_name,
             username: userExists.username,
             email,
             phone: userExists.phone,
@@ -168,27 +194,38 @@ async function sendEmail(req, res) {
       const results = [];
       const sentEmails = new Set();
 
-      const users = await User.find().select("email -_id");
-      const unverifiedUsers = await User.find({
-        isVerified: false,
-        role: { $ne: "admin" },
-      }).select("email -_id");
-      const verifiedUsers = await User.find({
-        isVerified: true,
-      }).select("email -_id");
-      const technomazeRegisteredUsers = await User.find({
-        registeredToTechnomaze: true,
-      }).select("email -_id");
-      const technomazeUnregisteredUsers = await User.find({
-        registeredToTechnomaze: false,
-      }).select("email -_id");
-      const admins = await User.find({ role: "admin" }).select("email -_id");
-      const ambassadors = await User.find({
-        role: "ambassador",
-      }).select("email -_id");
-      const allUsersExceptAdmins = await User.find({
-        role: { $ne: "admin" },
-      }).select("email -_id");
+      const userRes = await pgClient.query(`select email , id from users`);
+      const users = userRes.rows;
+      const unverifiedUserRes = await pgClient.query(`
+        select email ,id from users where is_verified =false and role !='admin' `);
+      const unverifiedUsers = unverifiedUserRes.rows;
+
+      const verifiedUserRes = await pgClient.query(`
+        select email ,id from users where is_verified =true`);
+      const verifiedUsers = verifiedUserRes.rows;
+
+      const technomazeRegisteredUsersRes = await pgClient.query(`
+        select email ,id from users where registered_to_technomaze =true`);
+      const technomazeRegisteredUsers = technomazeRegisteredUsersRes.rows;
+
+      const technomazeUnregisteredUsersRes = await pgClient.query(`
+        select email ,id from users where registered_to_technomaze =false`);
+      const technomazeUnregisteredUsers = technomazeUnregisteredUsersRes.rows;
+
+      const adminRes = await pgClient.query(
+        `select email , id from users where role ='admin'`,
+      );
+      const admins = adminRes.rows;
+
+      const ambassadorsRes = await pgClient.query(
+        `select email , id from users where role ='ambassador'`,
+      );
+      const ambassadors = ambassadorsRes.rows;
+
+      const allUserEXAdminRes = await pgClient.query(
+        `select email ,id from users where role != 'admin'`,
+      );
+      const allUsersExceptAdmins = allUserEXAdminRes.rows;
 
       const roles = Array.isArray(roleBasedRecipients)
         ? roleBasedRecipients
@@ -228,7 +265,7 @@ async function sendEmail(req, res) {
         }
 
         const uniqueEmails = emailList.filter(
-          (email) => !sentEmails.has(email)
+          (email) => !sentEmails.has(email),
         );
 
         await sendToList(uniqueEmails, results);

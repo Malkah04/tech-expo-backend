@@ -1,5 +1,6 @@
 const Registration = require("../models/technomaze-form.model");
-const User = require("../models/user.model"); // Import your User model
+const User = require("../models/user.model");
+const { pgClient } = require("../config/db.config.pg");
 
 const createRegistration = async (req, res) => {
   try {
@@ -16,14 +17,17 @@ const createRegistration = async (req, res) => {
     } = req.body;
 
     const {
-      _id: userId,
-      fullName,
+      id: userId,
+      first_name,
+      last_name,
       email,
       phone,
-      registeredToTechnomaze,
+      registered_to_technomaze,
     } = req.user;
+    console.log(email);
+    const fullName = `${first_name} ${last_name}`;
 
-    if (registeredToTechnomaze) {
+    if (registered_to_technomaze) {
       if (registrationType === "individual") {
         return res
           .status(400)
@@ -36,10 +40,12 @@ const createRegistration = async (req, res) => {
       }
     }
 
-    const existingRegistration = await Registration.findOne({
-      email,
-      registrationType,
-    });
+    const existingRes = await pgClient.query(
+      `select * from registrations where email =$1 and registration_type =$2 `,
+      [email, registrationType],
+    );
+    const existingRegistration = existingRes.rows[0];
+
     if (existingRegistration) {
       return res
         .status(400)
@@ -47,6 +53,7 @@ const createRegistration = async (req, res) => {
     }
 
     let newRegistration;
+    let values;
 
     if (registrationType === "individual") {
       if (
@@ -61,18 +68,22 @@ const createRegistration = async (req, res) => {
         });
       }
 
-      newRegistration = new Registration({
-        registrationType,
-        teamCopoun,
-        fullName,
-        email,
-        phone,
-        grade,
-        institution,
-        paymentMethod,
-        paymentPhone,
-        paymentScreenshotUrl,
-      });
+      await pgClient.query(
+        `
+        insert into registrations (registration_type,team_copoun,full_name ,email,phone,grade,institution,payment_method,payment_phone,payment_screenshot_url) values ($1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10)`,
+        [
+          registrationType,
+          teamCopoun,
+          fullName,
+          email,
+          phone,
+          grade,
+          institution,
+          paymentMethod,
+          paymentPhone,
+          paymentScreenshotUrl,
+        ],
+      );
     }
 
     if (registrationType === "friends") {
@@ -100,9 +111,14 @@ const createRegistration = async (req, res) => {
             .json({ error: `Friend #${i + 1} has missing fields` });
         }
 
-        const existingFriendRegistration = await Registration.findOne({
-          "friends.email": f.email,
-        });
+        const existingfriendRes = await pgClient.query(
+          `
+          select * from friends where email =$1`,
+          [f.email],
+        );
+
+        const existingFriendRegistration = existingfriendRes.rows[0];
+
         if (existingFriendRegistration) {
           return res.status(200).json({
             error: `Friend #${i + 1} (${f.fullName}) has already registered`,
@@ -110,19 +126,39 @@ const createRegistration = async (req, res) => {
         }
       }
 
-      newRegistration = new Registration({
-        registrationType,
-        teamCopoun,
-        friends,
-        paymentScreenshotsUrls,
-      });
+      const regRes = await pgClient.query(
+        `
+        insert into registrations 
+        (registration_type, team_copoun, payment_screenshots_urls)
+        values ($1 ,$2 ,$3) returning *`,
+        [registrationType, teamCopoun, paymentScreenshotsUrls],
+      );
+      const registrationed = regRes.rows[0];
+      console.log(regRes.rows[0]);
+
+      for (const f of friends) {
+        await pgClient.query(
+          `
+          INSERT INTO friends
+          (registration_id, full_name, email, phone, payment_method, payment_phone)
+          VALUES ($1,$2,$3,$4,$5,$6)
+          `,
+          [
+            registrationed.id,
+            f.fullName,
+            f.email,
+            f.phone,
+            f.paymentMethod,
+            f.paymentPhone,
+          ],
+        );
+      }
     }
 
-
-    await newRegistration.save();
-
-
-    await User.findByIdAndUpdate(userId, { registeredToTechnomaze: true });
+    await pgClient.query(
+      `update users set registered_to_technomaze = true where id = $1 returning *`,
+      [userId],
+    );
 
     return res.status(201).json({ message: "Registration saved successfully" });
   } catch (err) {
@@ -133,7 +169,13 @@ const createRegistration = async (req, res) => {
 
 const fetchRegistrations = async (req, res) => {
   try {
-    const registrations = await Registration.find();
+    const registerationRes = await pgClient.query(
+      `select * from registrations`,
+    );
+    const registrations = registerationRes.rows;
+    if (!registrations) {
+      return res.status(400).json({ message: "no regidtrations" });
+    }
     res.json(registrations);
   } catch (err) {
     console.error("Fetch Registrations Error:", err);
@@ -145,16 +187,25 @@ const deleteRegistration = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const registration = await Registration.findByIdAndDelete(id);
+    const registerationRes = await pgClient.query(
+      `delete from registrations where id =$1`,
+      [id],
+    );
+    const registration = registerationRes.rows[0];
 
     if (!registration) {
       return res.status(404).json({ error: "Registration not found" });
     }
-    const user = await User.findOne({ email: registration.email });
+    const userRes = await pgClient.query(`select * from users where email=$1`, [
+      registration.email,
+    ]);
+    const user = userRes.rows[0];
 
     if (user) {
-      user.registeredToTechnomaze = false;
-      await user.save();
+      await pgClient.query(
+        `update users set(registered_to_technomaze) values ($1) where email=$2 returning *`,
+        [false, registration.email],
+      );
     }
     res.json({ message: "Registration deleted successfully" });
   } catch (err) {
@@ -186,7 +237,28 @@ const updateRegisteration = async (req, res) => {
       school,
       teamCopoun,
     };
-    const registration = await Registration.findByIdAndUpdate(id, payload);
+    const registrationRes = await pgClient.query(
+      `update registrations set(email,
+      full_name,
+      grade,
+      payment_method,
+      payment_phone,
+      phone,
+      school,
+      team_copoun) values ($1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8) where id=$9 returning *`,
+      [
+        payload.email,
+        payload.fullName,
+        payload.grade,
+        payload.paymentMethod,
+        payload.paymentPhone,
+        payload.phone,
+        payload.school,
+        payload.teamCopoun,
+        id,
+      ],
+    );
+    const registration = registrationRes.rows[0];
     if (!registration) {
       return res.status(200).json({ error: "Registration not found" });
     }
@@ -211,7 +283,7 @@ const manualCreateRegistration = async (req, res) => {
       paymentPhone,
       paymentScreenshotUrl,
       friends,
-      paymentScreenshotsUrls
+      paymentScreenshotsUrls,
     } = req.body;
 
     if (!["individual", "friends"].includes(registrationType)) {
@@ -221,57 +293,127 @@ const manualCreateRegistration = async (req, res) => {
     let newRegistration;
 
     if (registrationType === "individual") {
-      if (!fullName || !email || !phone || !grade || !school || !paymentMethod || !paymentPhone || !paymentScreenshotUrl) {
-        return res.status(400).json({ error: "Missing required fields for individual registration" });
+      if (
+        !fullName ||
+        !email ||
+        !phone ||
+        !grade ||
+        !school ||
+        !paymentMethod ||
+        !paymentPhone ||
+        !paymentScreenshotUrl
+      ) {
+        return res.status(400).json({
+          error: "Missing required fields for individual registration",
+        });
       }
 
-      const existing = await Registration.findOne({ email, registrationType });
+      const existRes = await pgClient.query(
+        `select * from registrations where email =$1 and registration_type =$2`,
+        [email, registrationType],
+      );
+      const existing = existRes.rows[0];
+
       if (existing) {
-        return res.status(400).json({ error: "Registration already exists for this individual" });
+        return res
+          .status(400)
+          .json({ error: "Registration already exists for this individual" });
       }
 
-      newRegistration = new Registration({
-        registrationType,
-        teamCopoun,
-        fullName,
-        email,
-        phone,
-        grade,
-        institution: school,
-        paymentMethod,
-        paymentPhone,
-        paymentScreenshotUrl
+      const insertRes = await pgClient.query(
+        `
+        insert into registrations (registration_type,team_copoun,full_name ,email,phone,grade,institution,payment_method,payment_phone,payment_screenshot_url) values ($1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10) returning *`,
+        [
+          registrationType,
+          teamCopoun,
+          fullName,
+          email,
+          phone,
+          grade,
+          school,
+          paymentMethod,
+          paymentPhone,
+          paymentScreenshotUrl,
+        ],
+      );
+      newRegistration = insertRes.rows[0];
+      return res.status(201).json({
+        message: "Individual registration created successfully",
+        data: newRegistration,
       });
     }
 
     if (registrationType === "friends") {
-      if (!Array.isArray(friends) || friends.length === 0 || friends.length > 5) {
-        return res.status(400).json({ error: "Provide 1–5 friends with complete info" });
+      if (
+        !Array.isArray(friends) ||
+        friends.length === 0 ||
+        friends.length > 5
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Provide 1–5 friends with complete info" });
       }
 
       for (let i = 0; i < friends.length; i++) {
         const f = friends[i];
-        if (!f.fullName || !f.email || !f.phone || !f.grade || !f.institution || !f.paymentMethod || !f.paymentPhone) {
-          return res.status(400).json({ error: `Friend #${i + 1} has missing fields` });
+        if (
+          !f.fullName ||
+          !f.email ||
+          !f.phone ||
+          !f.grade ||
+          !f.institution ||
+          !f.paymentMethod ||
+          !f.paymentPhone
+        ) {
+          return res
+            .status(400)
+            .json({ error: `Friend #${i + 1} has missing fields` });
         }
+        const existingFriendRes = await pgClient.query(
+          `select * from friends where email = $1`,
+          [f.email],
+        );
 
-        const existingFriend = await Registration.findOne({ "friends.email": f.email });
-        if (existingFriend) {
-          return res.status(400).json({ error: `Friend #${i + 1} (${f.fullName}) has already registered` });
+        if (existingFriendRes.rows.length) {
+          return res.status(400).json({
+            error: `Friend #${i + 1} (${f.fullName}) has already registered`,
+          });
         }
       }
+      const regRes = await pgClient.query(
+        `INSERT INTO registrations
+          (registration_type, team_copoun, payment_screenshots_urls)
+         VALUES ($1, $2, $3)
+         RETURNING id`,
+        [registrationType, teamCopoun, paymentScreenshotsUrls],
+      );
 
-      newRegistration = new Registration({
-        registrationType,
-        teamCopoun,
-        friends,
-        paymentScreenshotsUrls
-      });
+      const registrationId = regRes.rows[0].id;
+
+      for (const f of friends) {
+        await pgClient.query(
+          `INSERT INTO friends
+            (registration_id, full_name, email, phone, grade, institution, payment_method, payment_phone)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            registrationId,
+            f.fullName,
+            f.email,
+            f.phone,
+            f.grade,
+            f.institution,
+            f.paymentMethod,
+            f.paymentPhone,
+          ],
+        );
+      }
+      newRegistration = { registrationId, friends };
     }
 
-    await newRegistration.save();
-
-    res.status(201).json({ message: "Registration created successfully", data: newRegistration });
+    res.status(201).json({
+      message: "Registration created successfully",
+      data: newRegistration,
+    });
   } catch (err) {
     console.error("Manual Registration Error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -279,7 +421,6 @@ const manualCreateRegistration = async (req, res) => {
 };
 
 module.exports = { manualCreateRegistration };
-
 
 module.exports = {
   createRegistration,

@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const User = require("../models/user.model.js");
 const Session = require("../models/session.model.js");
+const { pgClient } = require("../config/db.config.pg.js");
 
 const authenticate = async (req, res, next) => {
   const { sessionToken } = req.cookies;
@@ -9,17 +10,16 @@ const authenticate = async (req, res, next) => {
   }
 
   try {
-    const session = await Session.findOne({ sessionToken });
+    const searchQuery = `
+    select * from sessions
+    where session_token = $1
+    and status ='valid'
+    and expires_at > now()`;
 
-    if (
-      !session ||
-      session.status !== "valid" ||
-      session.expiresAt < new Date()
-    ) {
-      if (session) {
-        session.status = "expired";
-        await session.save();
-      }
+    const result = await pgClient.query(searchQuery, [sessionToken]);
+    const session = result.rows[0];
+
+    if (!session) {
       res.clearCookie("sessionToken", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -28,11 +28,21 @@ const authenticate = async (req, res, next) => {
       return res.status(400).json({ error: "Session expired or invalid" });
     }
 
-    const user = await User.findById(session.userId);
+    const userQuery = `
+    select * from users
+    where id = $1`;
+    const userRes = await pgClient.query(userQuery, [session.user_id]);
+    const user = userRes.rows[0];
     if (!user) {
-      session.status = "expired";
-      await session.save();
-      res.clearCookie("sessionToken");
+      await pgClient.query(
+        `update sessions set status = 'expired' where id = $1`,
+        [session.id],
+      );
+      res.clearCookie("sessionToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "none",
+      });
       return res.status(400).json({ error: "User not found" });
     }
 
