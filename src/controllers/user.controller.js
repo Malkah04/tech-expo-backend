@@ -607,8 +607,8 @@ const changeRole = async (req, res) => {
 
     await pgClient.query(
       `
-      update users set role =$1`,
-      [newRole],
+      update users set role =$1 where id=$2`,
+      [newRole, userId],
     );
 
     res.status(200).json({ message: "User role updated successfully" });
