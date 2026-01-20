@@ -621,12 +621,25 @@ const changeRole = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   const { id } = req.user;
   try {
-    const fields = Object.keys(req.body);
-    const values = Object.values(req.body);
+    // if (fields.length === 0) {
+    //   return res.status(400).json({ error: "No fields to update." });
+    // }
 
-    if (fields.length === 0) {
-      return res.status(400).json({ error: "No fields to update." });
-    }
+    const fieldMap = {
+      firstname: "first_name",
+      lastname: "last_name",
+      phone: "phone",
+      email: "email",
+      username: "username",
+      birthDate: "birth_date",
+      grade: "grade",
+      school: "school",
+      interests: "interests",
+      isVerified: "is_verified",
+    };
+
+    const fields = Object.keys(req.body).filter((f) => fieldMap[f]);
+    const values = fields.map((f) => req.body[f]);
 
     const setQuery = fields.map((f, i) => `${f} = $${i + 1}`).join(", ");
 
@@ -657,7 +670,6 @@ const updateUserProfile = async (req, res) => {
     });
   }
 };
-
 const getUserCertificates = async (req, res) => {
   try {
     const { id } = req.user;
