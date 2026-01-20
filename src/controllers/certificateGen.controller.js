@@ -3,20 +3,22 @@ const CertificateTemplate = require("../models/certificateTemplate.model");
 const PDFDocument = require("pdfkit");
 const generateAndUploadCertificate = require("../utils/generateCertificate.js");
 const User = require("../models/user.model.js");
+const { pgClient } = require("../config/db.config.pg");
 
+// done
 const createCertificateTemplate = async (req, res) => {
   const { templateName, background, fields, previewImage } = req.body;
   if (!templateName || !background || !fields) {
     return res.status(404).json({ error: "There are missing fields!" });
   }
   try {
-    const newTemplate = new CertificateTemplate({
-      templateName,
-      background,
-      fields,
-      previewUrl: previewImage,
-    });
-    await newTemplate.save();
+    await pgClient.query(
+      `
+      insert into certificationTemplete (templete_name , background ,fields ,preview_url)
+      values ($1 ,$2 ,$3 ,$4) 
+      returning *`,
+      [templateName, background, fields, previewImage],
+    );
     await res
       .status(201)
       .json({ message: `Template ${templateName} was saved successfully!` });
@@ -26,9 +28,13 @@ const createCertificateTemplate = async (req, res) => {
   }
 };
 
+// done
 const getCertificateTemplates = async (req, res) => {
   try {
-    const templates = await CertificateTemplate.find();
+    const templateRes = await pgClient.query(`
+      select * from certificationTemplete`);
+
+    const templates = templateRes.rows;
     res.status(200).json(templates);
   } catch (error) {
     console.error("Error fetching certificate templates:", error);
@@ -36,10 +42,17 @@ const getCertificateTemplates = async (req, res) => {
   }
 };
 
+// done
 const deleteCertificateTemplate = async (req, res) => {
   const { id } = req.params;
   try {
-    const deletedTemplate = await CertificateTemplate.findByIdAndDelete(id);
+    const templateRes = await pgClient.query(
+      `
+      delete from certificationTemplete where id=$1 returning *`,
+      [id],
+    );
+    const deletedTemplate = templateRes.rows[0];
+
     if (!deletedTemplate) {
       return res.status(404).json({ error: "Template not found" });
     }
@@ -50,6 +63,7 @@ const deleteCertificateTemplate = async (req, res) => {
   }
 };
 
+// done
 const createCertificate = async (req, res) => {
   const { type, templateId, email, role } = req.body;
 
@@ -60,7 +74,12 @@ const createCertificate = async (req, res) => {
   }
 
   try {
-    const template = await CertificateTemplate.findById(templateId);
+    const templeteRes = await pgClient.query(
+      `
+      select * from certificationTemplete where id =$1`,
+      [templateId],
+    );
+    const template = templeteRes.rows[0];
     if (!template) {
       return res.status(404).json({ error: "Template not found" });
     }
@@ -70,8 +89,12 @@ const createCertificate = async (req, res) => {
           error: "Email is required for single certificate generation",
         });
       }
+      const userRes = await pgClient.query(
+        `select * from users where email=$1`,
+        [email],
+      );
+      const user = userRes.rows[0];
 
-      const user = await User.findOne({ email });
       if (!user) {
         return res
           .status(404)
@@ -79,16 +102,6 @@ const createCertificate = async (req, res) => {
       }
 
       const url = await generateAndUploadCertificate({ template, user });
-      const certificate = await Certificate.findOne({ certificateURL: url });
-
-      if (certificate) {
-        user.certificates = user.certificates || [];
-        if (!user.certificates.includes(certificate._id)) {
-          user.certificates.push(certificate._id);
-          await user.save();
-        }
-      }
-
       return res.status(201).json({
         message: `Certificate generated for ${email}`,
         certificateUrl: url,
@@ -113,9 +126,16 @@ const createCertificate = async (req, res) => {
 
       let users = [];
       if (role === "technomaze users") {
-        users = await User.find({ registeredToTechnomaze: true });
+        const userRes = await pgClient.query(
+          `select * from users where registered_to_technomaze = true`,
+        );
+        users = userRes.rows;
       } else {
-        users = await User.find({ role });
+        const userRes = await pgClient.query(
+          `select * from users where role = $1`,
+          [role],
+        );
+        users = userRes.rows;
       }
 
       if (!users.length) {
@@ -130,17 +150,13 @@ const createCertificate = async (req, res) => {
         try {
           const url = await generateAndUploadCertificate({ template, user });
 
-          const certificate = await Certificate.findOne({
-            certificateURL: url,
-          });
+          const certificateRes = await pgClient.query(
+            `
+            select * from certificates where certificate_url =$1`,
+            [url],
+          );
 
-          if (certificate) {
-            user.certificates = user.certificates || [];
-            if (!user.certificates.includes(certificate._id)) {
-              user.certificates.push(certificate._id);
-              await user.save();
-            }
-          }
+          const certificate = certificateRes.rows;
 
           generatedCertificates.push({
             email: user.email,
@@ -166,12 +182,16 @@ const createCertificate = async (req, res) => {
   }
 };
 
+// done
 const getCertificates = async (req, res) => {
   try {
-    const certificates = await Certificate.find().populate(
-      "userId",
-      "username email role registeredToTechnomaze"
+    const certificateRes = await pgClient.query(
+      `select c.* ,u.username ,u.email ,u.role ,u.registered_to_technomaze
+      from certificates c 
+      join users u
+      on c.user_id =u.id`,
     );
+    const certificates = certificateRes.rows;
     res.status(200).json(certificates);
   } catch (error) {
     console.error("Error fetching certificates:", error);
@@ -179,17 +199,23 @@ const getCertificates = async (req, res) => {
   }
 };
 
+//done
 const deleteCertificate = async (req, res) => {
   const { id } = req.params;
   try {
     if (id === "all") {
-      await Certificate.deleteMany({});
+      await pgClient.query(`TRUNCATE TABLE certificates`);
       return res
         .status(200)
         .json({ message: "All certificates deleted successfully" });
     }
-    const deleteCertificate = await Certificate.findByIdAndDelete(id);
-    if (!deleteCertificate) {
+    const deleteRes = await pgClient.query(
+      `
+      delete from certificates where id =$1 `,
+      [id],
+    );
+    const deleteCertificate = this.deleteCertificate.rows[0];
+    if (!deleteCertificate || deleteCertificate.length === 0) {
       return res.status(404).json({ error: "Certificate not found" });
     }
     res.status(201).json({ message: "Certificate deleted successfully!" });
@@ -206,62 +232,76 @@ function sleep(ms) {
   });
 }
 
+// done
 const sendEmails = async (req, res) => {
-  const certificates = req.body; 
-  
+  const certificates = req.body;
+
   if (!certificates || !Array.isArray(certificates)) {
-    return res.status(400).json({ 
-      error: "Missing or invalid certificates array in request body" 
+    return res.status(400).json({
+      error: "Missing or invalid certificates array in request body",
     });
   }
 
   const results = [];
-  const sendMail = require('../utils/email');
-  const { loadTemplate } = require('../utils/template');
+  const sendMail = require("../utils/email");
+  const { loadTemplate } = require("../utils/template");
 
   for (const certData of certificates) {
-    const { credentialId, email } = certData;
-    
-    if (!credentialId || !email) {
+    const { credential_id, email } = certData;
+
+    if (!credential_id || !email) {
       results.push({
-        email: email || 'unknown',
+        email: email || "unknown",
         success: false,
-        message: "Missing credentialId or email"
+        message: "Missing credentialId or email",
       });
       continue;
     }
 
     try {
-      const certificate = await Certificate.findOne({ credentialId });
+      const certificateRes = await pgClient.query(
+        `select * from certificates where credential_id=$1`,
+        [credential_id],
+      );
+      const certificate = certificateRes.rows[0];
       if (!certificate) {
         results.push({
           email,
           success: false,
-          message: "Certificate not found"
+          message: "Certificate not found",
         });
         continue;
       }
 
-      const user = await User.findOne({ email });
+      const userRes = await pgClient.query(
+        "select * from users where email = $1",
+        [email],
+      );
+      const user = userRes.rows[0];
       if (!user) {
         results.push({
           email,
           success: false,
-          message: "User not found"
+          message: "User not found",
         });
         continue;
       }
 
       const variables = {
-        firstName: user.firstName || 'Participant',
-        lastName: user.lastName || '',
-        certificateUrl: certificate.certificateURL || '#',
-        issueDate: certificate.issuedAt ? new Date(certificate.issuedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-        credienitalId: certificate.credentialId, 
-        email: user.email
+        firstName: user.firstName || "Participant",
+        lastName: user.lastName || "",
+        certificateUrl: certificate.certificate_url || "#",
+        issueDate: certificate.issued_at
+          ? new Date(certificate.issued_at).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+        credienitalId: certificate.credential_id,
+        email: user.email,
       };
 
-      const personalizedHtml = loadTemplate('technomazeCertificate.html', variables);
+      const personalizedHtml = loadTemplate(
+        "technomazeCertificate.html",
+        variables,
+      );
 
       const subject = `🎓 Your TechnoMaze V2 Certificate is Ready!`;
       await sendMail(email, subject, personalizedHtml);
@@ -269,22 +309,21 @@ const sendEmails = async (req, res) => {
       results.push({
         email,
         success: true,
-        message: "Certificate email sent successfully"
+        message: "Certificate email sent successfully",
       });
 
       await sleep(5000);
-
     } catch (error) {
       console.error(`Error processing certificate for ${email}:`, error);
       results.push({
         email,
         success: false,
-        message: "Error sending email: " + error.message
+        message: "Error sending email: " + error.message,
       });
     }
   }
 
-  const successCount = results.filter(r => r.success).length;
+  const successCount = results.filter((r) => r.success).length;
   const failureCount = results.length - successCount;
 
   res.status(200).json({
@@ -293,25 +332,51 @@ const sendEmails = async (req, res) => {
     summary: {
       total: results.length,
       successful: successCount,
-      failed: failureCount
-    }
+      failed: failureCount,
+    },
   });
 };
 
 const validateCertificate = async (req, res) => {
-  const { id } = req.params;
-  const certificate = await Certificate.findOne({ credentialId: id })
-  if(!certificate) {
-    return res.status(404).json({ valid: false, message: "No certificate found" })
-  } else {
-    const user = await User.findOne({ certificates: certificate._id })
-    if(!user) {
-      return res.status(404).json({ valid: false, message: "No user found that owns this certificate." })
+  try {
+    const { id } = req.params;
+    const certificateRes = await pgClient.query(
+      `
+    select * from certificates where credential_id =$1 `,
+      [id],
+    );
+    const certificate = certificateRes.rows[0];
+    if (!certificate) {
+      return res
+        .status(404)
+        .json({ valid: false, message: "No certificate found" });
     }
-    const userFullName = user.fullName
-    return res.status(201).json({ valid: true, certificateUrl: certificate.certificateURL, authorFullName: userFullName })
+
+    const userRes = await pgClient.query("select * from users where id = $1", [
+      certificate.user_id,
+    ]);
+    const user = userRes.rows[0];
+
+    if (!user) {
+      return res.status(404).json({
+        valid: false,
+        message: "No user found that owns this certificate.",
+      });
+    }
+
+    const userFullName = `${user.first_name} ${user.last_name}`;
+    return res.status(201).json({
+      valid: true,
+      certificateUrl: certificate.certificate_url,
+      authorFullName: userFullName,
+    });
+  } catch (err) {
+    console.error("Validate certificate error:", error);
+    return res
+      .status(500)
+      .json({ valid: false, message: "Internal server error" });
   }
-}
+};
 
 module.exports = {
   createCertificateTemplate,
@@ -321,5 +386,5 @@ module.exports = {
   deleteCertificateTemplate,
   deleteCertificate,
   sendEmails,
-  validateCertificate
+  validateCertificate,
 };

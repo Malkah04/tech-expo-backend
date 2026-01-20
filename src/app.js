@@ -43,7 +43,7 @@ app.use(passport.session());
 // Auth routes
 app.use("/api", authRoutes);
 app.use("/api", registrationRoutes);
-// Email routes
+// // Email routes
 app.use("/api", emailRoutes);
 // Certifications Routes
 app.use("/api", certificateRoute);

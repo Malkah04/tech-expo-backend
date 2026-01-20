@@ -4,6 +4,12 @@ const axios = require("axios");
 const crypto = require("crypto");
 const Certificate = require("../models/certificate.model");
 const path = require("path");
+const { pgClient } = require("../config/db.config.pg");
+const supabase = require("../config/supabase");
+
+const generateID = async function () {
+  return crypto.randomBytes(3).toString("hex");
+};
 
 function resolveFont(fontFamily) {
   const builtInFonts = [
@@ -39,21 +45,15 @@ function hashTemplate(template) {
 
 async function generateAndUploadCertificate({ template, user }) {
   try {
-    const newCredentialId = await Certificate.generateID();
-    const certificate = new Certificate({
-      userId: user._id,
-      credentialId: newCredentialId,
-      title: template.templateName,
-    });
+    const newCredentialId = await generateID();
+    const certificateRes = await pgClient.query(
+      `
+      insert into certificates (user_id ,credential_id ,title) 
+      values ($1 ,$2 ,$3) returning *`,
+      [user.id, newCredentialId, template.templateName],
+    );
 
-    const currentTemplateHash = hashTemplate(template);
-
-    if (
-      certificate.certificateURL &&
-      certificate.templateHash === currentTemplateHash
-    ) {
-      return certificate.certificateURL;
-    }
+    const certificate = certificateRes.rows[0];
 
     const response = await axios.get(template.background, {
       responseType: "arraybuffer",
@@ -80,11 +80,11 @@ async function generateAndUploadCertificate({ template, user }) {
     // Register custom fonts once
     doc.registerFont(
       "GTProeliumSharp",
-      path.join(__dirname, "../fonts/GTProeliumSharp.ttf")
+      path.join(__dirname, "../fonts/GTProeliumSharp.ttf"),
     );
     doc.registerFont(
       "Bahnschrift",
-      path.join(__dirname, "../fonts/Bahnschrift.ttf")
+      path.join(__dirname, "../fonts/Bahnschrift.ttf"),
     );
 
     // Render fields
@@ -98,11 +98,11 @@ async function generateAndUploadCertificate({ template, user }) {
           text = user.role || "";
           break;
         case "credentialId":
-          text = certificate.credentialId || "";
+          text = certificate.credential_id || "";
           break;
         case "date":
-          text = certificate.issuedAt
-            ? new Date(certificate.issuedAt).toLocaleDateString()
+          text = certificate.issued_at
+            ? new Date(certificate.issued_at).toLocaleDateString()
             : new Date().toLocaleDateString();
           break;
         default:
@@ -132,19 +132,24 @@ async function generateAndUploadCertificate({ template, user }) {
     doc.end();
     const buffer = await pdfBufferPromise;
 
-    const result = await uploadToCloudinary(
-      buffer,
-      "certificates",
-      "raw",
-      "certificates",
-      "pdf"
+    const { data, error } = await supabase.storage
+      .from("certificate-templates-images")
+      .upload(`certificates/${certificate.credential_id}.pdf`, buffer, {
+        contentType: "application/pdf",
+        upsert: true,
+      });
+    if (error) throw error;
+
+    const { publicUrl } = supabase.storage
+      .from("certificate-templates-images")
+      .getPublicUrl(`certificates/${certificate.credential_id}.pdf`);
+
+    await pgClient.query(
+      `UPDATE certificates SET certificate_url = $1 WHERE id = $2`,
+      [publicUrl, certificate.id],
     );
 
-    certificate.certificateURL = result;
-    certificate.templateHash = currentTemplateHash;
-    await certificate.save();
-
-    return result;
+    return publicUrl;
   } catch (err) {
     console.error("Error generating certificate:", err);
     throw err;

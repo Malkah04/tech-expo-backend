@@ -25,6 +25,7 @@ const {
 const { authorizeRoles } = require("../middlewares/role.middleware.js");
 const User = require("../models/user.model.js");
 const { initializeSession } = require("../utils/session.js");
+const { pgClient } = require("../config/db.config.pg.js");
 const host =
   process.env.NODE_ENV === "development"
     ? process.env.LOCAL_ORIGIN
@@ -61,28 +62,41 @@ router.patch(
   "/auth/change-role",
   authenticate,
   authorizeRoles("admin"),
-  changeRole
+  changeRole,
 );
 router.get("/auth", authenticate, async (req, res) => {
   try {
-    const u = await User.findById(req.user._id);
+    const userRes = await pgClient.query(`select * from users where id =$1`, [
+      req.user.id,
+    ]);
+    const u = userRes.rows[0];
+    // const u = await User.findById(req.user._id);
+    if (!u) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const certRes = await pgClient.query(
+      "select credential_id, certificate_url, title, issued_at from certificates where user_id = $1",
+      [u.id],
+    );
+
+    const certificates = certRes.rows;
 
     const profile = {
-      userId: u._id,
+      userId: u.id,
       fullName:
-        u.fullName ||
-        [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+        [u.first_name, u.last_name].filter(Boolean).join(" ") ||
         u.username ||
         "",
       email: u.email || "",
       phone: u.phone || "",
       grade: u.grade || "",
       institution: u.school || "",
-      registeredToTechnomaze: u.registeredToTechnomaze || false,
+      registeredToTechnomaze: u.registered_to_technomaze || false,
       role: u.role || "user",
-      isVerified: u.isVerified || false,
+      isVerified: u.is_verified || false,
       username: u.username || "",
-      certificates: u.certificates || [],
+      certificates: certificates || [],
       providers: u.providers || [],
     };
 
@@ -97,8 +111,13 @@ router.get("/auth", authenticate, async (req, res) => {
 });
 router.post("/auth/logout", authenticate, async (req, res) => {
   try {
-    req.session.status = "expired";
-    await req.session.save();
+    await pgClient.query(
+      `
+      update sessions set status ='expired' where id =$1`,
+      [req.authSession.id],
+    );
+    // req.session.status = "expired";
+    // await req.session.save();
     res.clearCookie("sessionToken", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -117,11 +136,18 @@ router.post("/auth/logout", authenticate, async (req, res) => {
 });
 
 router.get("/numbers", async (req, res) => {
-  const numbers = await User.find({
-    registeredToTechnomaze: true,
-    role: { $ne: "admin" },
-  });
-  res.json(numbers.map((e) => e.phone + " " + e.fullName));
+  const numberRes = await pgClient.query(
+    `select * from users where registered_to_technomaze = 'true' and role != 'admin'`,
+  );
+  // const numbers = await User.find({
+  //   registeredToTechnomaze: true,
+  //   role: { $ne: "admin" },
+  // });
+  const numbers = numberRes.rows.map(
+    (u) => `${u.phone} ${u.first_name} ${u.last_name}`,
+  );
+  res.json(numbers);
+  // res.json(numbers.map((e) => e.phone + " " + e.fullName));
 });
 
 router.patch("/auth/edit", authenticate, updateUserProfile);
@@ -129,90 +155,94 @@ router.get("/auth/userCertificates", authenticate, getUserCertificates);
 
 router.get(
   "/auth/google",
-  passport.authenticate("google", { scope: ["profile", "email"] })
+  passport.authenticate("google", { scope: ["profile", "email"] }),
 );
 
 router.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   async (req, res) => {
-    const session = await initializeSession(req.user._id, false);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    const session = await initializeSession(req.user.id, false);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
 
-    res.cookie("sessionToken", session.sessionToken, {
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
     res.redirect(`${host}/dashboard`);
-  }
+  },
 );
 
 router.get(
   "/auth/facebook",
-  passport.authenticate("facebook", { scope: ["email"] })
+  passport.authenticate("facebook", { scope: ["email"] }),
 );
 
 router.get(
   "/auth/facebook/callback",
   passport.authenticate("facebook", { failureRedirect: "/login" }),
   async (req, res) => {
-    const session = await initializeSession(req.user._id, false);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    const session = await initializeSession(req.user.id, false);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
 
-    res.cookie("sessionToken", session.sessionToken, {
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
 
-    res.redirect(`${host}/dashboard`);
-  }
+    if (req.user.needsEmail) {
+      return res.redirect(`${host}/add-email`);
+    }
+
+    return res.redirect(`${host}/dashboard`);
+  },
 );
 
 router.get(
   "/auth/github",
-  passport.authenticate("github", { scope: ["user:email"] })
+  passport.authenticate("github", { scope: ["user:email"] }),
 );
 
 router.get(
   "/auth/github/callback",
   passport.authenticate("github", { failureRedirect: "/login" }),
   async (req, res) => {
-    const session = await initializeSession(req.user._id, false);
-    const expiresInMs = session.expiresAt.getTime() - Date.now();
+    const session = await initializeSession(req.user.id, false);
+    const expiresInMs = session.expires_at.getTime() - Date.now();
 
-    res.cookie("sessionToken", session.sessionToken, {
+    res.cookie("sessionToken", session.session_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
 
-    res.cookie("csrfToken", session.csrfToken, {
+    res.cookie("csrfToken", session.csrf_token, {
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
     res.redirect(`${host}/dashboard`);
-  }
+  },
 );
 
 module.exports = router;
