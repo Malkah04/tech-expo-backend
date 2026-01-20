@@ -58,7 +58,7 @@ router.put("/auth/reset-password/:token", resetPassword);
 router.get("/auth/users", authenticate, fetchUsers);
 router.get("/auth/me", authenticate, getMe);
 router.post("/auth/add-email", authenticate, addEmail);
-router.patch(
+router.put(
   "/auth/change-role",
   authenticate,
   authorizeRoles("admin"),
