@@ -2,7 +2,7 @@ const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
   host: "smtp.office365.com",
-  // secure: true,
+  secure: false,
   port: 587,
   auth: {
     user: "info@techexpo.site",
