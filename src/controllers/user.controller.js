@@ -158,7 +158,7 @@ const registerUser = async (req, res) => {
 
     res.status(201).json({
       message: "User registered successfully, please verify your email.",
-      csrfToken: session.csrfToken,
+      csrfToken: session.csrf_token,
       validationBeforeLogin: newUser.validate_before_login,
       email: newUser.email,
     });
