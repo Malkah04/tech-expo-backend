@@ -417,7 +417,7 @@ const resendEmail = async (req, res) => {
     }
     if (
       user.last_email_sent &&
-      Date.now() - new Date(user.last_email_sent).getTime() < 60 * 1000
+      Date.now() - user.last_email_sent.getTime() < 60 * 1000
     ) {
       return res
         .status(429)
