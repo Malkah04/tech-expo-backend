@@ -415,7 +415,10 @@ const resendEmail = async (req, res) => {
         message: "User already verified!",
       });
     }
-    if (user.last_email_sent && Date.now() - user.last_email_sent < 60 * 1000) {
+   if (
+      user.last_email_sent &&
+      Date.now() - new Date(user.last_email_sent).getTime() < 60 * 1000
+    ) {
       return res
         .status(429)
         .json({ error: "Please wait before requesting again" });
