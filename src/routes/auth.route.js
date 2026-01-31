@@ -32,7 +32,7 @@ const host =
     : process.env.CLIENT_ORIGIN;
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 1 * 60 * 1000,
   max: 5,
   message: "Too many login attempts, please try again later.",
   handler: (req, res) => {
