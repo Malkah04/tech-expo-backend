@@ -415,7 +415,7 @@ const resendEmail = async (req, res) => {
         message: "User already verified!",
       });
     }
-   if (
+    if (
       user.last_email_sent &&
       Date.now() - new Date(user.last_email_sent).getTime() < 60 * 1000
     ) {

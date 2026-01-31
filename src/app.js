@@ -12,7 +12,10 @@ const sendMail = require("./utils/email.js");
 const User = require("./models/user.model.js");
 const generateAndUploadCertificate = require("./utils/generateCertificate.js");
 const expressSession = require("express-session");
+const pgSession = require("connect-pg-simple")(expressSession);
+const { Pool } = require("pg");
 // Middleware setup
+
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
 app.use(setCors);
@@ -20,8 +23,17 @@ app.use(cookies());
 
 app.set("trust proxy", 1);
 
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
 app.use(
   expressSession({
+    store: new pgSession({
+      pool: pool,
+      tableName: "sessions_store",
+    }),
     secret: process.env.SESSION_SECRET || "keyboard cat",
     resave: false,
     saveUninitialized: false,
