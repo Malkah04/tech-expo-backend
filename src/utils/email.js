@@ -21,13 +21,16 @@ const nodemailer = require("nodemailer");
 
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.brevo.com",
-  secure: process.env.SMTP_SECURE === "false",
-  port: 465,
+  secure: process.env.SMTP_SECURE === "true",
+  port: 587,
   auth: {
     user: process.env.BREVO_SMTP_USER,
     pass: process.env.BREVO_SMTP_PASS,
   },
   secure: false,
+  connectionTimeout: 50000,
+  greetingTimeout: 50000,
+  socketTimeout: 50000,
 });
 
 const sendMail = async (to, subject, text) => {
