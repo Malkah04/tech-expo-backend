@@ -168,6 +168,146 @@ const registerUser = async (req, res) => {
   }
 };
 
+// const registerUser = async (req, res) => {
+//   const schema = z.object({
+//     firstName: z.string().min(2),
+//     lastName: z.string().min(2),
+//     username: z.string().min(3),
+//     email: z.email(),
+//     phone: z.string(),
+//     password: z.string().min(8),
+//     birthDate: z.string(),
+//     interests: z.array(z.string()).optional(),
+//     agreeToTerms: z.literal(true),
+//     subscribeNewsletter: z.boolean().optional(),
+//     country: z.string(),
+//     city: z.string(),
+//     country_code: z.string(),
+//   });
+
+//   const parsed = schema.safeParse(req.body);
+//   if (!parsed.success) {
+//     return res.status(400).json({ error: parsed.error.flatten() });
+//   }
+
+//   const {
+//     firstName,
+//     lastName,
+//     username,
+//     email,
+//     password,
+//     phone,
+//     birthDate,
+//     interests,
+//     subscribeNewsletter,
+//     country,
+//     city,
+//     country_code,
+//   } = parsed.data;
+
+//   const normalizedEmail = email.toLowerCase();
+//   const normalizedUsername = username.toLowerCase();
+
+//   try {
+//     const checkQuery = `select * from users where email=$1 or username =$2`;
+//     const checkValue = [normalizedEmail, normalizedUsername];
+
+//     const checkRes = await pgClient.query(checkQuery, checkValue);
+//     if (checkRes.rows.some((u) => u.email === normalizedEmail))
+//       return res.status(400).json({ error: "Email already in use" });
+//     if (checkRes.rows.some((u) => username === normalizedUsername))
+//       return res.status(400).json({ error: "Username already taken" });
+
+//     const hashedPassword = await bcrypt.hash(password, 10);
+
+//     const { token, hashedToken, expires } = generateVerificationToken();
+
+//     const insertQuery = `
+//     insert into users(
+//       first_name,
+//       last_name,
+//       username,
+//       email,
+//       password,
+//       phone,
+//       birth_date,
+//       interests,
+//       agree_to_terms,
+//       subscribe_newsletter,
+//       validate_before_login,
+//       verification_token,
+//       verification_expires,
+//       last_email_sent,
+//       country,
+//       city,
+//       country_code
+//     )
+//     values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 ,$17)
+//     returning *`;
+
+//     const insertValues = [
+//       firstName,
+//       lastName,
+//       normalizedUsername,
+//       normalizedEmail,
+//       hashedPassword,
+//       phone,
+//       birthDate,
+//       JSON.stringify(interests || []),
+//       true,
+//       subscribeNewsletter || false,
+//       false,
+//       hashedToken,
+//       expires,
+//       new Date(),
+//       country,
+//       city,
+//       country_code,
+//     ];
+
+//     const result = await pgClient.query(insertQuery, insertValues);
+//     const newUser = result.rows[0];
+
+//     const validationUrl = `${host}/verify?token=${token}`;
+//     await sendMail(
+//       newUser.email,
+//       "Verify your email",
+//       loadTemplate("verification.html", {
+//         firstName: newUser.first_name,
+//         email: newUser.email,
+//         validationUrl,
+//       }),
+//     );
+
+//     const session = await initializeSession(newUser.id, false);
+//     const expiresInMs = session.expires_at.getTime() - Date.now();
+
+//     res.cookie("sessionToken", session.session_token, {
+//       httpOnly: true,
+//       secure: true,
+//       sameSite: "none",
+//       maxAge: expiresInMs,
+//     });
+
+//     res.cookie("csrfToken", session.csrf_token, {
+//       httpOnly: false,
+//       secure: true,
+//       sameSite: "none",
+//       maxAge: expiresInMs,
+//     });
+
+//     res.status(201).json({
+//       message: "User registered successfully, please verify your email.",
+//       csrfToken: session.csrf_token,
+//       validationBeforeLogin: newUser.validate_before_login,
+//       email: newUser.email,
+//     });
+//   } catch (error) {
+//     console.error("Registration error:", error);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// };
+
 const emailCheck = async (req, res) => {
   const { email } = req.body;
 
@@ -435,7 +575,7 @@ const resendEmail = async (req, res) => {
     );
 
     const validationUrl = `${host}/verify?token=${token}`;
-    sendMail(
+    await sendMail(
       user.email,
       "Verify your email",
       loadTemplate("verification.html", {
@@ -490,7 +630,7 @@ const forgotPassword = async (req, res) => {
 
     await pgClient.query(
       `
-      update users set reset_password_expires =$1 , reset_password_token =$2 , validateBeforeSave =false where id =$3`,
+      update users set reset_password_expires =$1 , reset_password_token =$2 , validate_before_login =false where id =$3`,
       [expires, hashedToken, user.id],
     );
 
@@ -511,7 +651,7 @@ const forgotPassword = async (req, res) => {
     } catch (err) {
       await pgClient.query(
         `
-      update users set reset_password_token =NULL, reset_password_expires =NULL , validateBeforeSave =false where id =$1`,
+      update users set reset_password_token =NULL, reset_password_expires =NULL , validate_before_login =false where id =$1`,
         [user.id],
       );
 
@@ -534,7 +674,7 @@ const resetPassword = async (req, res) => {
 
     const userQ = await pgClient.query(
       `
-      select * from users where reset_password_token =$1 ,reset_password_expires >$2 `,
+      select * from users where reset_password_token =$1 and reset_password_expires >$2 `,
       [hashedToken, now],
     );
 
