@@ -435,7 +435,7 @@ const resendEmail = async (req, res) => {
     );
 
     const validationUrl = `${host}/verify?token=${token}`;
-    await sendMail(
+    sendMail(
       user.email,
       "Verify your email",
       loadTemplate("verification.html", {
@@ -497,7 +497,7 @@ const forgotPassword = async (req, res) => {
     const resetUrl = `${host}/reset-password/${resetToken}`;
 
     try {
-      await sendMail(
+      sendMail(
         user.email,
         "Password Reset Request",
         loadTemplate("reset-password.html", {
