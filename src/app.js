@@ -1,5 +1,5 @@
-const dns = require('node:dns');
-dns.setDefaultResultOrder('ipv4first');
+const dns = require("node:dns");
+dns.setDefaultResultOrder("ipv4first");
 require("dotenv").config();
 const express = require("express");
 const setCors = require("./middlewares/cors.middleware");
@@ -15,7 +15,7 @@ const User = require("./models/user.model.js");
 const generateAndUploadCertificate = require("./utils/generateCertificate.js");
 const expressSession = require("express-session");
 const pgSession = require("connect-pg-simple")(expressSession);
-
+const { Pool } = require("pg");
 // Middleware setup
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
@@ -24,10 +24,16 @@ app.use(cookies());
 
 app.set("trust proxy", 1);
 
+const pgPool = new Pool({
+  ssl: { rejectUnauthorized: false },
+});
+
 app.use(
   expressSession({
     store: new pgSession({
-      conString: process.env.DATABASE_URL,
+      pool: pgPool,
+      tableName: "sessions_store",
+      createTableIfMissing: true,
     }),
     secret: process.env.SESSION_SECRET || "keyboard cat",
     resave: false,
@@ -41,7 +47,7 @@ app.use(
   }),
 );
 
-const passport = require("./config/passport.config");
+const passport = require("./config/passport.config.js");
 app.use(passport.initialize());
 app.use(passport.session());
 
