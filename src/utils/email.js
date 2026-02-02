@@ -1,38 +1,30 @@
 const nodemailer = require("nodemailer");
 
+const transporter = nodemailer.createTransport({
+  host: "smtp.office365.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: "info@techexpo.site",
+    pass: "qvrrvggxddjlsmsm",
+  },
+
+});
+
 // const transporter = nodemailer.createTransport({
-//   host: "smtp.office365.com",
-//   secure: false,
+//   host: "smtp-relay.brevo.com",
 //   port: 587,
+//   secure: false,
 //   auth: {
-//     user: "info@techexpo.site",
-//     pass: "qvrrvggxddjlsmsm",
+//     user: process.env.BREVO_SMTP_USER,
+//     pass: process.env.BREVO_SMTP_PASS,
 //   },
 //   connectionTimeout: 50000,
 //   greetingTimeout: 50000,
 //   socketTimeout: 50000,
-//   // requireTLS: true,
-//   tls: {
-//     ciphers: 'SSLv3',
-//     rejectUnauthorized: false 
-//   }
+//   requireTLS: true,
 
 // });
-
-const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.BREVO_SMTP_USER,
-    pass: process.env.BREVO_SMTP_PASS,
-  },
-  connectionTimeout: 50000,
-  greetingTimeout: 50000,
-  socketTimeout: 50000,
-  requireTLS: true,
-
-});
 
 const sendMail = async (to, subject, text) => {
   try {
