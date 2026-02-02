@@ -129,7 +129,7 @@ const registerUser = async (req, res) => {
     const newUser = result.rows[0];
 
     const validationUrl = `${host}/verify?token=${token}`;
-    await sendMail(
+    sendMail(
       newUser.email,
       "Verify your email",
       loadTemplate("verification.html", {
