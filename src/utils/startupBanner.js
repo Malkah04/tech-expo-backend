@@ -10,29 +10,49 @@ async function checkRoutes(app, baseUrl = "http://localhost:3030") {
   for (const route of routes) {
     const path = route.path;
     const methods = route.methods.join(", ");
+
+    if (!methods.includes("GET")) {
+      console.log(
+        ` ${chalk.cyan(methods.padEnd(10))} ${chalk.white(
+          path.padEnd(30),
+        )} ⏭ non-GET route`,
+      );
+      continue;
+    }
+
     try {
       const res = await axios.get(baseUrl + path);
       const status =
         res.status === 200
           ? chalk.green("✅ OK")
           : chalk.yellow(`⚠️ ${res.status}`);
+
       console.log(
         ` ${chalk.cyan(methods.padEnd(10))} ${chalk.white(
-          path.padEnd(30)
-        )} ${status}`
+          path.padEnd(30),
+        )} ${status}`,
       );
     } catch (err) {
       const status = err.response?.status || "ERR";
+
+      if ([400, 401, 403].includes(status)) {
+        console.log(
+          ` ${chalk.cyan(methods.padEnd(10))} ${chalk.white(
+            path.padEnd(30),
+          )} ${chalk.yellow(`⚠️ ${status}`)}`,
+        );
+        continue;
+      }
+
       console.log(
         ` ${chalk.cyan(methods.padEnd(10))} ${chalk.white(
-          path.padEnd(30)
-        )} ${chalk.red(`❌ ${status}`)}`
+          path.padEnd(30),
+        )} ${chalk.red(`❌ ${status}`)}`,
       );
 
-  
       console.error(
         chalk.redBright(`\n🚨 Error accessing ${methods} ${baseUrl + path}`),
-        chalk.yellow(err.message)
+        chalk.yellow(err.message),
       );
 
       if (err.response?.data) {
@@ -52,8 +72,8 @@ function printHeader() {
   console.clear();
   console.log(
     chalk.blueBright(
-      figlet.textSync("Tech Expo API", { horizontalLayout: "default" })
-    )
+      figlet.textSync("Tech Expo API", { horizontalLayout: "default" }),
+    ),
   );
   console.log(chalk.gray("=".repeat(60)));
 }
@@ -66,7 +86,7 @@ async function displayStartup(app, dbStatus) {
   console.log(
     `🗄️  Database Status: ${
       dbStatus ? chalk.green("Connected") : chalk.red("Disconnected")
-    }`
+    }`,
   );
   console.log(chalk.gray("=".repeat(60)) + "\n");
 }

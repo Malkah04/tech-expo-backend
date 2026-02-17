@@ -56,7 +56,6 @@ passport.use(
     async (accessToken, refreshToken, profile, done) => {
       try {
         const email = profile.emails?.[0]?.value?.toLowerCase();
-
         const byProviderRes = await pgClient.query(
           `
           select *
@@ -84,7 +83,7 @@ passport.use(
 
           const user = byEmailRes.rows[0];
           if (user) {
-            await pgClient.query(
+            const result = await pgClient.query(
               `
               update users
               set providers = coalesce(providers, '[]'::jsonb) || $1::jsonb
@@ -97,7 +96,6 @@ passport.use(
                 user.id,
               ],
             );
-
             return done(null, user);
           }
           if (!user) {

@@ -11,6 +11,7 @@ const Certificate = require("../models/certificate.model");
 const mongoose = require("mongoose");
 const Session = require("../models/session.model");
 const { pgClient } = require("../config/db.config.pg");
+const { json } = require("body-parser");
 
 function generateVerificationToken() {
   const token = crypto.randomBytes(20).toString("hex");
@@ -41,15 +42,18 @@ const registerUser = async (req, res) => {
     phone: z.string(),
     password: z.string().min(8),
     birthDate: z.string(),
-    grade: z.string(),
-    school: z.string(),
     interests: z.array(z.string()).optional(),
     agreeToTerms: z.literal(true),
     subscribeNewsletter: z.boolean().optional(),
+    country: z.string(),
+    city: z.string(),
+    country_code: z.string(),
   });
 
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
+    console.log("Err");
+
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
@@ -61,24 +65,43 @@ const registerUser = async (req, res) => {
     password,
     phone,
     birthDate,
-    grade,
-    school,
     interests,
     subscribeNewsletter,
+    country_code,
+    country,
+    city,
   } = parsed.data;
+  // recover by default true
 
   const normalizedEmail = email.toLowerCase();
   const normalizedUsername = username.toLowerCase();
+  let notRecoverd = false;
 
   try {
     const checkQuery = `select * from users where email=$1 or username =$2`;
     const checkValue = [normalizedEmail, normalizedUsername];
 
     const checkRes = await pgClient.query(checkQuery, checkValue);
-    if (checkRes.rows.some((u) => u.email === normalizedEmail))
-      return res.status(400).json({ error: "Email already in use" });
-    if (checkRes.rows.some((u) => username === normalizedUsername))
-      return res.status(400).json({ error: "Username already taken" });
+    const user = checkRes.rows;
+
+    const activeEmail = user.find(
+      (u) => u.email === normalizedEmail && u.is_deleted === false,
+    );
+
+    if (activeEmail)
+      return res.status(400).json({ error: "Email already taken" });
+
+    const deletedEmail = user.find(
+      (u) => u.email === normalizedEmail && u.is_deleted === true,
+    );
+
+    if (deletedEmail && countTimeForRecovery(deletedEmail.deleted_at) > 0) {
+      return res.status(200).json({
+        message: `You delete your Account , but you can recover it within  ${countTimeForRecovery(deletedEmail.deleted_at)} days `,
+        // pop mesage say want to recover? if yes go to login if no contain register
+        popMessage: true,
+      });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -93,17 +116,20 @@ const registerUser = async (req, res) => {
       password,
       phone,
       birth_date,
-      grade,
-      school,
       interests,
       agree_to_terms,
       subscribe_newsletter,
       validate_before_login,
       verification_token,
       verification_expires,
-      last_email_sent
+      last_email_sent,
+      country,
+      country_code,
+      city,
+      is_deleted,
+      deleted_at
     ) 
-    values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+    values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 ,false ,NULL)
     returning *`;
 
     const insertValues = [
@@ -114,8 +140,6 @@ const registerUser = async (req, res) => {
       hashedPassword,
       phone,
       birthDate,
-      grade,
-      school,
       JSON.stringify(interests || []),
       true,
       subscribeNewsletter || false,
@@ -123,6 +147,9 @@ const registerUser = async (req, res) => {
       hashedToken,
       expires,
       new Date(),
+      country,
+      country_code,
+      city,
     ];
 
     const result = await pgClient.query(insertQuery, insertValues);
@@ -168,156 +195,27 @@ const registerUser = async (req, res) => {
   }
 };
 
-// const registerUser = async (req, res) => {
-//   const schema = z.object({
-//     firstName: z.string().min(2),
-//     lastName: z.string().min(2),
-//     username: z.string().min(3),
-//     email: z.email(),
-//     phone: z.string(),
-//     password: z.string().min(8),
-//     birthDate: z.string(),
-//     interests: z.array(z.string()).optional(),
-//     agreeToTerms: z.literal(true),
-//     subscribeNewsletter: z.boolean().optional(),
-//     country: z.string(),
-//     city: z.string(),
-//     country_code: z.string(),
-//   });
-
-//   const parsed = schema.safeParse(req.body);
-//   if (!parsed.success) {
-//     return res.status(400).json({ error: parsed.error.flatten() });
-//   }
-
-//   const {
-//     firstName,
-//     lastName,
-//     username,
-//     email,
-//     password,
-//     phone,
-//     birthDate,
-//     interests,
-//     subscribeNewsletter,
-//     country,
-//     city,
-//     country_code,
-//   } = parsed.data;
-
-//   const normalizedEmail = email.toLowerCase();
-//   const normalizedUsername = username.toLowerCase();
-
-//   try {
-//     const checkQuery = `select * from users where email=$1 or username =$2`;
-//     const checkValue = [normalizedEmail, normalizedUsername];
-
-//     const checkRes = await pgClient.query(checkQuery, checkValue);
-//     if (checkRes.rows.some((u) => u.email === normalizedEmail))
-//       return res.status(400).json({ error: "Email already in use" });
-//     if (checkRes.rows.some((u) => username === normalizedUsername))
-//       return res.status(400).json({ error: "Username already taken" });
-
-//     const hashedPassword = await bcrypt.hash(password, 10);
-
-//     const { token, hashedToken, expires } = generateVerificationToken();
-
-//     const insertQuery = `
-//     insert into users(
-//       first_name,
-//       last_name,
-//       username,
-//       email,
-//       password,
-//       phone,
-//       birth_date,
-//       interests,
-//       agree_to_terms,
-//       subscribe_newsletter,
-//       validate_before_login,
-//       verification_token,
-//       verification_expires,
-//       last_email_sent,
-//       country,
-//       city,
-//       country_code
-//     )
-//     values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 ,$17)
-//     returning *`;
-
-//     const insertValues = [
-//       firstName,
-//       lastName,
-//       normalizedUsername,
-//       normalizedEmail,
-//       hashedPassword,
-//       phone,
-//       birthDate,
-//       JSON.stringify(interests || []),
-//       true,
-//       subscribeNewsletter || false,
-//       false,
-//       hashedToken,
-//       expires,
-//       new Date(),
-//       country,
-//       city,
-//       country_code,
-//     ];
-
-//     const result = await pgClient.query(insertQuery, insertValues);
-//     const newUser = result.rows[0];
-
-//     const validationUrl = `${host}/verify?token=${token}`;
-//     await sendMail(
-//       newUser.email,
-//       "Verify your email",
-//       loadTemplate("verification.html", {
-//         firstName: newUser.first_name,
-//         email: newUser.email,
-//         validationUrl,
-//       }),
-//     );
-
-//     const session = await initializeSession(newUser.id, false);
-//     const expiresInMs = session.expires_at.getTime() - Date.now();
-
-//     res.cookie("sessionToken", session.session_token, {
-//       httpOnly: true,
-//       secure: true,
-//       sameSite: "none",
-//       maxAge: expiresInMs,
-//     });
-
-//     res.cookie("csrfToken", session.csrf_token, {
-//       httpOnly: false,
-//       secure: true,
-//       sameSite: "none",
-//       maxAge: expiresInMs,
-//     });
-
-//     res.status(201).json({
-//       message: "User registered successfully, please verify your email.",
-//       csrfToken: session.csrf_token,
-//       validationBeforeLogin: newUser.validate_before_login,
-//       email: newUser.email,
-//     });
-//   } catch (error) {
-//     console.error("Registration error:", error);
-//     res.status(500).json({ error: "Internal server error" });
-//   }
-// };
-
 const emailCheck = async (req, res) => {
-  const { email } = req.body;
+  // recover by defult true , but if user dont want to recover ? handled in else cond and go to register
+  const { email, recover } = req.body;
 
   const result = await pgClient.query("select * from users where email = $1 ", [
     email,
   ]);
   const exist = result.rows[0];
-
-  if (exist) {
-    return res.status(200).json({ error: "Email already in use" });
+  if (recover === true) {
+    if (exist && exist.is_deleted === true) {
+      if (countTimeForRecovery(exist.deleted_at) > 0) {
+        return res.status(200).json({
+          error: `Your Account is Deleted ,but you can recover it within ${countTimeForRecovery(exist.deleted_at)} days`,
+          // pop mesage say want to recover? if yes go to login if no contain and make recover =false
+          popMessage: true,
+        });
+      }
+    }
+    if (exist) {
+      return res.status(200).json({ message: "Email already in use" });
+    }
   } else {
     return res.status(200).json({ error: "" });
   }
@@ -415,9 +313,6 @@ const addEmail = async (req, res) => {
 };
 
 const loginUser = async (req, res) => {
-  const host = req.get("host");
-  console.log(host);
-
   const { identifier, password, rememberMe } = req.body;
 
   if (!identifier || !password) {
@@ -427,27 +322,69 @@ const loginUser = async (req, res) => {
   try {
     const isEmail = /\S+@\S+\.\S+/.test(identifier);
     const column = isEmail ? "email" : "username";
-
     const identifierLower = identifier.toLowerCase();
 
-    const result = await pgClient.query(
-      `SELECT * FROM users WHERE ${column} = $1 LIMIT 1`,
+    const userRes = await pgClient.query(
+      `select * from users where ${column} = $1 limit 1`,
       [identifierLower],
     );
 
-    const user = result.rows[0];
-
-    if (!user || !user.password) {
-      return res
-        .status(200)
-        .json({ error: "Invalid email, username or password" });
+    const user = userRes.rows[0];
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res
-        .status(200)
+        .status(401)
         .json({ error: "Invalid email, username or password" });
+    }
+
+    if (user.is_deleted === true) {
+      if (countTimeForRecovery(user.deleted_at) <= 0) {
+        return res.status(200).json({
+          error:
+            "The recovery period for this account has expired. It cannot be restored",
+        });
+      }
+
+      console.log("here");
+
+      const restoredRes = await pgClient.query(
+        `update users set is_deleted = false, deleted_at = NULL ,status='active' where id = $1 returning *`,
+        [user.id],
+      );
+
+      console.log(restoredRes.rows[0]);
+    }
+
+    const suspendRes = await pgClient.query(
+      `select * from suspended_user where user_id = $1`,
+      [user.id],
+    );
+
+    const suspend = suspendRes.rows[0];
+    if (suspend) {
+      if (!suspend.suspend_until) {
+        return res
+          .status(200)
+          .json({ error: "Your account is permanently suspended" });
+      }
+
+      if (new Date(suspend.suspend_until) > new Date()) {
+        return res.status(200).json({
+          error: `Account suspended until ${suspend.suspend_until}`,
+        });
+      }
+
+      await pgClient.query(`delete from suspended_user where user_id = $1`, [
+        user.id,
+      ]);
+
+      await pgClient.query(`update users SET status = 'active' where id = $1`, [
+        user.id,
+      ]);
     }
 
     const session = await initializeSession(user.id, rememberMe);
@@ -467,13 +404,16 @@ const loginUser = async (req, res) => {
       maxAge: expiresInMs,
     });
 
-    res.status(200).json({
-      message: "Login successful",
+    return res.status(200).json({
+      message:
+        user.is_deleted === true
+          ? "Account restored and login successful"
+          : "Login successful",
       csrfToken: session.csrf_token,
     });
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -647,6 +587,11 @@ const forgotPassword = async (req, res) => {
         }),
       );
 
+      await pgClient.query(
+        `insert into event_log (user_id ,field) values ($1,$2)`,
+        [user.id, "email"],
+      );
+
       res.status(200).json({ message: "Email sent" });
     } catch (err) {
       await pgClient.query(
@@ -692,6 +637,11 @@ const resetPassword = async (req, res) => {
       [hashedPassword, user.id],
     );
 
+    await pgClient.query(
+      `insert into event_log (user_id,field) values ($1,$2)`,
+      [user.id, "password"],
+    );
+
     res.status(200).json({ message: "Password reset successful" });
   } catch (error) {
     console.error("Reset password error:", error);
@@ -702,7 +652,7 @@ const resetPassword = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const userq = await pgClient.query(
-      `SELECT id, first_name, last_name, email, username, phone, birth_date, grade, school, interests, is_verified 
+      `SELECT id, first_name, last_name, email, username, phone, birth_date, country ,country_code ,city, interests, is_verified 
       FROM users
       WHERE id = $1`,
       [req.user.id],
@@ -764,10 +714,6 @@ const changeRole = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   const { id } = req.user;
   try {
-    // if (fields.length === 0) {
-    //   return res.status(400).json({ error: "No fields to update." });
-    // }
-
     const fieldMap = {
       firstname: "first_name",
       lastname: "last_name",
@@ -775,8 +721,9 @@ const updateUserProfile = async (req, res) => {
       email: "email",
       username: "username",
       birthDate: "birth_date",
-      grade: "grade",
-      school: "school",
+      country: "country",
+      city: "city",
+      country_code: "country_code",
       interests: "interests",
       isVerified: "is_verified",
     };
@@ -790,7 +737,7 @@ const updateUserProfile = async (req, res) => {
       `UPDATE users 
        SET ${setQuery} 
        WHERE id = $${fields.length + 1} 
-       RETURNING id, first_name, last_name, email, username, phone, birth_date, grade, school, interests, is_verified`,
+       RETURNING id, first_name, last_name, email, username, phone, birth_date, country ,city ,country_code, interests, is_verified`,
       [...values, id],
     );
 
@@ -853,6 +800,219 @@ const getUserCertificates = async (req, res) => {
   }
 };
 
+// create table suspended_user (user_id , suspend_until ,reason)
+
+const suspendUser = async (req, res) => {
+  try {
+    let { email, amount, unit, reason } = req.body;
+    email = email.toLowerCase();
+    const userRes = await pgClient.query(
+      `SELECT * FROM users WHERE email = $1 AND is_deleted = false`,
+      [email],
+    );
+    const user = userRes.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: "No user found" });
+    }
+
+    const checkifUserSuspended = await pgClient.query(
+      `select * from suspended_user where user_id =$1 `,
+      [user.id],
+    );
+    const check = checkifUserSuspended.rows[0];
+    if (check) {
+      return res.status(200).json({ error: "user already suspended" });
+    }
+    if (unit === "forever") {
+      await pgClient.query(
+        `insert into suspended_user (user_id , suspend_until ,reason) values($1 ,NULL ,$2)`,
+        [user.id, reason],
+      );
+      await pgClient.query(
+        `UPDATE users SET status = 'suspend' WHERE id = $1`,
+        [user.id],
+      );
+      return res.status(200).json({ message: "User suspended forever" });
+    }
+    await pgClient.query(
+      `insert into suspended_user (user_id ,suspend_until ,reason) values ($1 , now() + ($2 || ' ' || $3)::interval ,$4 ) `,
+      [user.id, amount, unit, reason],
+    );
+    await pgClient.query(`UPDATE users SET status = 'suspend' WHERE id = $1`, [
+      user.id,
+    ]);
+    return res.status(200).json({ message: "User suspended successfully" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const unSuspendUser = async (req, res) => {
+  try {
+    let { email } = req.body;
+    email = email.toLowerCase();
+    const findUserRes = await pgClient.query(
+      `select * from users where email =$1`,
+      [email],
+    );
+    const findUser = findUserRes.rows[0];
+    if (!findUser) {
+      return res.status(404).json({ error: "No user found" });
+    }
+    const suspendUserRes = await pgClient.query(
+      `select * from suspended_user where user_id=$1`,
+      [findUser.id],
+    );
+    const suspendUser = suspendUserRes.rows[0];
+    if (!suspendUser) {
+      return res.status(404).json({ error: "User not suspended" });
+    }
+    await pgClient.query(`delete from suspended_user where user_id=$1 `, [
+      findUser.id,
+    ]);
+    await pgClient.query(`UPDATE users SET status = 'active' WHERE id = $1`, [
+      findUser.id,
+    ]);
+
+    return res.status(200).json({ message: "User unsuspended successfully" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const deleteAcc = async (req, res) => {
+  try {
+    const userRes = await pgClient.query(
+      `update users set is_deleted =$1 ,deleted_at = NOW() ,status='suspend'  where id =$2 returning *`,
+      [true, req.user.id],
+    );
+
+    const deletedUser = userRes.rows[0];
+    if (!deletedUser) {
+      return res.status(404).json({ message: "user not exist" });
+    }
+    return res.status(200).json({ message: "user deleted successfully" });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: "Internal server error. Please try again later." });
+  }
+};
+
+// event_log (user_id , old_value , new_value , field)
+
+const changeEmail = async (req, res) => {
+  const { oldEmail, newEmail } = req.body;
+  try {
+    const userQuery = await pgClient.query(
+      `select * from users where email =$1 and id =$2`,
+      [oldEmail, req.user.id],
+    );
+    const user = userQuery.rows[0];
+
+    if (!user) {
+      return res.status(200).json({ error: "User not Found" });
+    }
+
+    const existEventLog = await pgClient.query(
+      `select * from event_log where user_id = $1 and field =$2`,
+      [req.user.id, "email"],
+    );
+
+    const exist = existEventLog.rows[0];
+
+    if (exist) {
+      await pgClient.query(
+        `delete from event_log where user_id = $1 and field =$2 `,
+        [req.user.id, "email"],
+      );
+    }
+
+    await pgClient.query(`update users set email =$1 where id=$2`, [
+      newEmail,
+      user.id,
+    ]);
+
+    await pgClient.query(
+      `insert into event_log (user_id , old_value ,new_value ,field) values ($1,$2,$3,$4)`,
+      [user.id, oldEmail, newEmail, "email"],
+    );
+    return res.status(200).json({ message: "Email updated successfully" });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: "Internal server error. Please try again later." });
+  }
+};
+
+const getAllLogs = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const Result = await pgClient.query(
+      "select * from event_log where user_id =$1",
+      [id],
+    );
+    if (Result.rowCount === 0)
+      return res.status(200).json({ error: "no event_log Found" });
+    return res.status(200).json(Result.rows);
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ error: "Internal server error. Please try again later." });
+  }
+};
+
+function countTimeForRecovery(deletedAt) {
+  if (!deletedAt) return 0;
+
+  const RECOVERY_DAYS = 14;
+  const RECOVERY_MS = RECOVERY_DAYS * 24 * 60 * 60 * 1000;
+
+  const deletedTime = new Date(deletedAt).getTime();
+  const now = Date.now();
+
+  const remainingMs = RECOVERY_MS - (now - deletedTime);
+
+  return Math.max(0, Math.ceil(remainingMs / (24 * 60 * 60 * 1000)));
+}
+
+const completeData = async (req, res) => {
+  const { id } = req.user;
+  const { phone, city, country, country_code, interests, birthDate } = req.body;
+
+  try {
+    if (
+      !phone ||
+      !city ||
+      !country ||
+      !country_code ||
+      !interests ||
+      !birthDate
+    ) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const userRes = await pgClient.query(
+      `update users set (phone ,city ,country ,country_code ,interests ,birth_date) values($1 ,$2,$3,$4,$5 ,$6) where id=$7`,
+      [phone, city, country, country_code, interests, birthDate, id],
+    );
+
+    const user = userRes.rows[0];
+    res.status(200).json({
+      message: "User data Ccompleted successfully.",
+      user: user,
+    });
+  } catch {
+    return res
+      .status(500)
+      .json({ error: "Internal server error. Please try again later." });
+  }
+};
+
+module.exports = { countTimeForRecovery };
+
 module.exports = {
   registerUser,
   loginUser,
@@ -868,4 +1028,11 @@ module.exports = {
   updateUserProfile,
   getUserCertificates,
   addEmail,
+  deleteAcc,
+  suspendUser,
+  unSuspendUser,
+  changeEmail,
+  countTimeForRecovery,
+  completeData,
+  getAllLogs,
 };

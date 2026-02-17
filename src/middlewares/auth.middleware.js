@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const User = require("../models/user.model.js");
 const Session = require("../models/session.model.js");
 const { pgClient } = require("../config/db.config.pg.js");
+const { countTimeForRecovery } = require("../controllers/user.controller.js");
 
 const authenticate = async (req, res, next) => {
   const { sessionToken } = req.cookies;
@@ -38,12 +39,49 @@ const authenticate = async (req, res, next) => {
         `update sessions set status = 'expired' where id = $1`,
         [session.id],
       );
+
       res.clearCookie("sessionToken", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "none",
       });
       return res.status(400).json({ error: "User not found" });
+    }
+
+    if (user.is_deleted === true) {
+      if (countTimeForRecovery(user.deleted_at) <= 0) {
+        await pgClient.query(
+          `update session set status ='expired' where id =$1`,
+          [session.id],
+        );
+        return res.status(403).json({ error: "Account deleted permanently" });
+      }
+    }
+
+    const suspendUserRes = await pgClient.query(
+      `select * from suspended_user where user_id =$1`,
+      [user.id],
+    );
+
+    const suspendRes = suspendUserRes.rows[0];
+
+    if (suspendRes) {
+      if (!suspendRes.suspend_until) {
+        return res
+          .status(403)
+          .json({ error: "Your account is permanently suspended" });
+      }
+      if (new Date(suspendRes.suspend_until) > new Date()) {
+        return res.status(403).json({
+          error: `Account suspended until ${suspendRes.suspend_until}`,
+        });
+      }
+      await pgClient.query(`delete from suspended_user where user_id=$1 `, [
+        user.id,
+      ]);
+      await pgClient.query(`update users set status ='active' where id =$1`, [
+        user.id,
+      ]);
     }
 
     req.user = user;
