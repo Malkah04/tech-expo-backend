@@ -10,9 +10,8 @@ const cookies = require("cookie-parser");
 const app = express();
 const emailRoutes = require("./routes/email.route.js");
 const certificateRoute = require("./routes/certificate.route.js");
-const sendMail = require("./utils/email.js");
-const User = require("./models/user.model.js");
-const generateAndUploadCertificate = require("./utils/generateCertificate.js");
+const userRoutes = require("./routes/user.route.js");
+const reportRoutes = require("./routes/reports.route.js");
 const expressSession = require("express-session");
 const pgSession = require("connect-pg-simple")(expressSession);
 const { Pool } = require("pg");
@@ -60,5 +59,9 @@ app.use("/api", registrationRoutes);
 app.use("/api", emailRoutes);
 // Certifications Routes
 app.use("/api", certificateRoute);
+
+app.use("/api", userRoutes);
+
+app.use("/api", reportRoutes);
 
 module.exports = app;

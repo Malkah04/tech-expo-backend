@@ -1,5 +1,7 @@
 const express = require("express");
 const passport = require("../config/passport.config.js");
+const multer = require("multer");
+const fs = require("fs");
 const {
   registerUser,
   loginUser,
@@ -15,6 +17,7 @@ const {
   updateUserProfile,
   getUserCertificates,
   addEmail,
+  completeData,
 } = require("../controllers/user.controller.js");
 const router = express.Router();
 const rateLimit = require("express-rate-limit");
@@ -26,6 +29,11 @@ const { authorizeRoles } = require("../middlewares/role.middleware.js");
 const User = require("../models/user.model.js");
 const { initializeSession } = require("../utils/session.js");
 const { pgClient } = require("../config/db.config.pg.js");
+const supabase = require("../config/supabase.js");
+const {
+  checkSuspension,
+  stopSuspendUser,
+} = require("../middlewares/chechsuspend.middleware.js");
 const host =
   process.env.NODE_ENV === "development"
     ? process.env.LOCAL_ORIGIN
@@ -47,6 +55,7 @@ const loginLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
+router.use(checkSuspension);
 router.post("/auth/register", registerUser);
 router.post("/auth/login", loginLimiter, loginUser);
 router.post("/auth/emailAvailability", emailCheck);
@@ -58,19 +67,54 @@ router.put("/auth/reset-password/:token", resetPassword);
 router.get("/auth/users", authenticate, fetchUsers);
 router.get("/auth/me", authenticate, getMe);
 router.post("/auth/add-email", authenticate, addEmail);
+
 router.put(
   "/auth/change-role",
   authenticate,
   authorizeRoles("admin"),
+
   changeRole,
 );
+
+const upload = multer({ dest: "uploads/" });
+router.post(
+  "/auth/uploadProfilePic",
+  authenticate,
+  upload.single("profile_pic"),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      const fileName = `user-${req.user.id}.jpg`;
+      const { data, error } = await supabase.storage
+        .from("profile-pics")
+        .upload(fileName, fs.readFileSync(file.path), {
+          contentType: file.mimetype,
+          upsert: true,
+        });
+      if (error) return res.status(500).json({ error: error.message });
+      fs.unlinkSync(file.path);
+      const { publicURL } = supabase.storage
+        .from("profile-pics")
+        .getPublicUrl(fileName);
+
+      await pgClient.query(
+        "UPDATE users SET profile_pic_url = $1 WHERE id = $2",
+        [publicURL, req.user.id],
+      );
+
+      res.status(200).json({ url: publicURL });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 router.get("/auth", authenticate, async (req, res) => {
   try {
     const userRes = await pgClient.query(`select * from users where id =$1`, [
       req.user.id,
     ]);
     const u = userRes.rows[0];
-    // const u = await User.findById(req.user._id);
     if (!u) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -90,14 +134,16 @@ router.get("/auth", authenticate, async (req, res) => {
         "",
       email: u.email || "",
       phone: u.phone || "",
-      grade: u.grade || "",
-      institution: u.school || "",
       registeredToTechnomaze: u.registered_to_technomaze || false,
       role: u.role || "user",
       isVerified: u.is_verified || false,
       username: u.username || "",
       certificates: certificates || [],
       providers: u.providers || [],
+      country_code: u.country_code || "",
+      city: u.city || "",
+      country: u.country || "",
+      profile_pic: u.profile_pic_url || "",
     };
 
     res.set("Cache-Control", "no-store");
@@ -116,8 +162,6 @@ router.post("/auth/logout", authenticate, async (req, res) => {
       update sessions set status ='expired' where id =$1`,
       [req.authSession.id],
     );
-    // req.session.status = "expired";
-    // await req.session.save();
     res.clearCookie("sessionToken", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
@@ -139,28 +183,28 @@ router.get("/numbers", async (req, res) => {
   const numberRes = await pgClient.query(
     `select * from users where registered_to_technomaze = 'true' and role != 'admin'`,
   );
-  // const numbers = await User.find({
-  //   registeredToTechnomaze: true,
-  //   role: { $ne: "admin" },
-  // });
+
   const numbers = numberRes.rows.map(
     (u) => `${u.phone} ${u.first_name} ${u.last_name}`,
   );
   res.json(numbers);
-  // res.json(numbers.map((e) => e.phone + " " + e.fullName));
 });
 
 router.patch("/auth/edit", authenticate, updateUserProfile);
+router.put("/auth/complete-data", authenticate, completeData);
 router.get("/auth/userCertificates", authenticate, getUserCertificates);
 
 router.get(
   "/auth/google",
   passport.authenticate("google", { scope: ["profile", "email"] }),
+  stopSuspendUser,
 );
 
 router.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
+  stopSuspendUser,
+
   async (req, res) => {
     const session = await initializeSession(req.user.id, false);
     const expiresInMs = session.expires_at.getTime() - Date.now();
@@ -178,6 +222,19 @@ router.get(
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
+
+    const user = req.user;
+    const uR = await pgClient.query(`select * from users where email =$1`, [
+      user.email,
+    ]);
+    const u = uR.rows[0];
+    if (
+      (!u.phone && !u.country && !u.country_code) ||
+      !u.city ||
+      !u.interests
+    ) {
+      return res.redirect(`${host}/complete-profile`);
+    }
     res.redirect(`${host}/dashboard`);
   },
 );
@@ -185,11 +242,13 @@ router.get(
 router.get(
   "/auth/facebook",
   passport.authenticate("facebook", { scope: ["email"] }),
+  stopSuspendUser,
 );
 
 router.get(
   "/auth/facebook/callback",
   passport.authenticate("facebook", { failureRedirect: "/login" }),
+  stopSuspendUser,
   async (req, res) => {
     const session = await initializeSession(req.user.id, false);
     const expiresInMs = session.expires_at.getTime() - Date.now();
@@ -212,6 +271,19 @@ router.get(
       return res.redirect(`${host}/add-email`);
     }
 
+    const user = req.user;
+    const uR = await pgClient.query(`select * from users where email =$1`, [
+      user.email,
+    ]);
+    const u = uR.rows[0];
+    if (
+      (!u.phone && !u.country && !u.country_code) ||
+      !u.city ||
+      !u.interests
+    ) {
+      return res.redirect(`${host}/complete-profile`);
+    }
+
     return res.redirect(`${host}/dashboard`);
   },
 );
@@ -219,11 +291,13 @@ router.get(
 router.get(
   "/auth/github",
   passport.authenticate("github", { scope: ["user:email"] }),
+  stopSuspendUser,
 );
 
 router.get(
   "/auth/github/callback",
   passport.authenticate("github", { failureRedirect: "/login" }),
+  stopSuspendUser,
   async (req, res) => {
     const session = await initializeSession(req.user.id, false);
     const expiresInMs = session.expires_at.getTime() - Date.now();
@@ -241,6 +315,19 @@ router.get(
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: expiresInMs,
     });
+
+    const user = req.user;
+    const uR = await pgClient.query(`select * from users where email =$1`, [
+      user.email,
+    ]);
+    const u = uR.rows[0];
+    if (
+      (!u.phone && !u.country && !u.country_code) ||
+      !u.city ||
+      !u.interests
+    ) {
+      return res.redirect(`${host}/complete-profile`);
+    }
     res.redirect(`${host}/dashboard`);
   },
 );
