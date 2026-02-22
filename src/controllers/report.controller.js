@@ -14,46 +14,45 @@ const fs = require("fs");
 // create table reports (user_id , screenshot url , report ,topic)
 
 // status
+async function insertImage(file, from = "reports-screenshot") {
+  const fileName = `screenshot-${Date.now()}-${file.originalname}`;
 
-async function insertImage(file, topic, userId, from = "reports-screenshot") {
-  const fileName = `screenshot-report-for-${topic}-from-${userId}.jpg`;
   const { error } = await supabase.storage
     .from(from)
     .upload(fileName, fs.readFileSync(file.path), {
       contentType: file.mimetype,
       upsert: true,
     });
-  if (error) throw new Error(error.message);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
   fs.unlinkSync(file.path);
-  const { publicUrl, publicURL } = supabase.storage.from(from).getPublicUrl(fileName);
-  return publicURL || publicUrl || "";
+
+  const { data } = supabase.storage.from(from).getPublicUrl(fileName);
+
+  return data.publicUrl;
 }
 
+//report -> level , specific issue ,category , description ,screenshot
 const makeReport = async (req, res) => {
-  const { email, report, topic } = req.body;
-  const screenshotFile = req.file;
-  const reportUser = req.reportUser;
-  const userId = reportUser?.id;
+  const { description, category, priority, specific_issue } = req.body;
+  const userId = req.reportUser.id;
+  const screenshot = req.file;
   try {
-    if (reportUser?.suspended) {
-      return res.status(403).json({
-        error: reportUser.forever
-          ? "Your account is permanently suspended. You cannot submit reports."
-          : "Your account is suspended. You cannot submit reports until the suspension ends.",
-      });
-    }
-    if (!email || !report || !topic) {
+    if (!category || !description || !priority) {
       return res.status(400).json({ error: "missing required input" });
     }
     let publicURL = "";
 
-    if (screenshotFile) {
-      publicURL = await insertImage(screenshotFile, topic, userId);
+    if (screenshot) {
+      publicURL = await insertImage(screenshot);
     }
 
     await pgClient.query(
-      `insert into reports (user_id ,screenshot_url ,report ,topic) values ($1,$2,$3,$4)`,
-      [userId, publicURL, report, topic],
+      `insert into reports_and_suggestions (user_id ,screenshot_url , priority,category,specific_issue ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))`,
+      [userId, publicURL, priority, category, specific_issue],
     );
 
     return res.status(200).json({ message: "Report sent successfully" });
@@ -64,11 +63,28 @@ const makeReport = async (req, res) => {
   }
 };
 
-const fetchReports = async (req, res) => {
+// suggestion -> category , title , description ,screen shot
+
+const makeSuggestion = async (req, res) => {
+  const { category, title, description, screenshot } = req.body;
+
+  const userId = req.reportUser.id;
   try {
-    const reportRes = await pgClient.query(`select * from reports`);
-    const reports = reportRes.rows;
-    return res.status(200).json(reports);
+    if (!category || !description || !title) {
+      return res.status(400).json({ error: "missing required input" });
+    }
+    let publicURL = "";
+
+    if (screenshot) {
+      publicURL = insertImage(screenshot);
+    }
+
+    await pgClient.query(
+      `insert into reports_and_suggestions (user_id ,screenshot_url ,category,title ,description ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5,'in Progress','Suggestion' ,'TCK-' || nextval('ticket_seq'))`,
+      [userId, publicURL, category, title, description],
+    );
+
+    return res.status(200).json({ message: "suggestion sent successfully" });
   } catch (err) {
     return res
       .status(500)
@@ -76,30 +92,99 @@ const fetchReports = async (req, res) => {
   }
 };
 
-const fetchReportsByTopic = async (req, res) => {
-  const topic = req.query.topic ?? req.body?.topic;
+const fetchReportsAndSuggestions = async (req, res) => {
   try {
-    if (!topic) {
-      return res.status(400).json({ error: "topic query parameter is required" });
-    }
     const reportRes = await pgClient.query(
-      `select * from reports where topic=$1`,
-      [topic],
+      ` select r.*, u.email from reports_and_suggestions r join users u on r.user_id = u.id`,
     );
+
     const reports = reportRes.rows;
-    if (reports.length === 0) {
-      return res.status(200).json({ error: "no report for this topic" });
-    }
     return res.status(200).json(reports);
   } catch (err) {
+    console.error("Fetch reports error:", err);
     return res
       .status(500)
       .json({ error: "Internal server error. Please try again later." });
+  }
+};
+
+const filter = async (req, res) => {
+  const { type, status, priority, search } = req.query;
+
+  try {
+    let query = `
+      SELECT r.*, u.email
+      FROM reports_and_suggestions r
+      JOIN users u ON r.user_id = u.id
+      WHERE 1=1
+    `;
+    const values = [];
+    let index = 1;
+
+    if (type && type !== "all") {
+      query += ` AND r.type = $${index++}`;
+      values.push(type);
+    }
+
+    if (status && status !== "all") {
+      query += ` AND r.status = $${index++}`;
+      values.push(status);
+    }
+
+    if (priority && priority !== "all") {
+      query += ` AND r.priority = $${index++}`;
+      values.push(priority);
+    }
+
+    if (search && search.trim() !== "") {
+      query += `
+          AND (
+            similarity(r.title, $${index}) > 0.3
+            OR similarity(r.description, $${index}) > 0.3
+            OR similarity(r.specific_issue, $${index}) > 0.3
+            OR similarity(u.email, $${index}) > 0.3
+          )
+        `;
+      values.push(search);
+      index++;
+      query += ` ORDER BY GREATEST(
+        similarity(r.title, $${index - 1}),
+        similarity(r.description, $${index - 1}),
+        similarity(r.specific_issue, $${index - 1}),
+        similarity(u.email, $${index - 1})
+      ) DESC`;
+    }
+
+    const result = await pgClient.query(query, values);
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error("Filter/Search error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const getReportsOfUser = async (req, res) => {
+  const { id } = req.query;
+  try {
+    const result = await pgClient.query(
+      `
+        select * from reports_and_suggestions where user_id =$1`,
+      [id],
+    );
+    if (result.rowCount === 0) {
+      return res.status(200).json({ error: "no reports for this user" });
+    }
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error("Filter/Search error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
 
 module.exports = {
-  fetchReports,
+  fetchReportsAndSuggestions,
   makeReport,
-  fetchReportsByTopic,
+  makeSuggestion,
+  filter,
+  getReportsOfUser,
 };

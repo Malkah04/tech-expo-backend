@@ -29,11 +29,11 @@ const authenticate = async (req, res, next) => {
       return res.status(400).json({ error: "Session expired or invalid" });
     }
 
-    // Allow in-complete sessions through for: (1) complete-data so they can submit the form,
-    // (2) GET /api/auth so the frontend can load user data and show the complete-profile page
+    // Allow in-complete sessions through for: (1) complete-data, (2) GET /api/auth, (3) GET /api/report/* (admin fetch reports)
     const isCompleteDataRoute = req.originalUrl && req.originalUrl.includes("complete-data");
     const isGetAuthRoute = req.method === "GET" && req.originalUrl && req.originalUrl.split("?")[0].endsWith("/auth");
-    if (session.session_type === "in-complete" && !isCompleteDataRoute && !isGetAuthRoute) {
+    const isReportRoute = req.method === "GET" && req.originalUrl && req.originalUrl.includes("/report/");
+    if (session.session_type === "in-complete" && !isCompleteDataRoute && !isGetAuthRoute && !isReportRoute) {
       return res.status(200).json({ redirect: `redirect to complete-profile` });
     }
 
