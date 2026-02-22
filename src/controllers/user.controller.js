@@ -245,11 +245,12 @@ const addEmail = async (req, res) => {
   }
 
   try {
-    const result = await pgClient("select * from users where email = $1 ", [
-      email,
-    ]);
+    const result = await pgClient.query(
+      "select * from users where email = $1 ",
+      [email],
+    );
     const emailDoc = result.rows[0];
-    const providerRes = await pgClient(
+    const providerRes = await pgClient.query(
       "select * from users where providers @> $1 limit 1 ",
       [JSON.stringify([{ providerId }])],
     );
@@ -288,7 +289,7 @@ const addEmail = async (req, res) => {
       );
 
       if (providerDoc && providerDoc.id !== emailDoc.id) {
-        await pgClient.query("delete from users where id :$1", [
+        await pgClient.query("delete from users where id = $1", [
           providerDoc.id,
         ]);
       }
@@ -332,6 +333,12 @@ const loginUser = async (req, res) => {
     const user = userRes.rows[0];
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    if (!user.password || typeof user.password !== "string") {
+      return res.status(401).json({
+        error: "This account uses Google or another sign-in. Please use the same method to log in.",
+      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -412,13 +419,20 @@ const loginUser = async (req, res) => {
       csrfToken: session.csrf_token,
     });
   } catch (err) {
-    console.error("Login error:", err);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error("Login error:", err.message, err.stack);
+    return res.status(500).json({
+      error: err.message && err.message.includes("Illegal arguments")
+        ? "Invalid credentials. If you signed up with Google, please use Google to log in."
+        : "Internal server error",
+    });
   }
 };
 
 const verifyEmail = async (req, res) => {
   let { token } = req.query;
+  if (!token || typeof token !== "string") {
+    return res.status(400).json({ error: "Invalid or expired token" });
+  }
   const rtoken = decodeURIComponent(token).trim();
 
   const hashedToken = crypto.createHash("sha256").update(rtoken).digest("hex");
@@ -457,7 +471,7 @@ const verifyEmail = async (req, res) => {
       [user.id],
     );
 
-    const session = await initializeSession(user.id, true);
+    const session = await initializeSession(user.id, true, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -477,6 +491,7 @@ const verifyEmail = async (req, res) => {
     res.status(200).json({ message: "Email verified successfully" });
   } catch (error) {
     console.error("Email verification error:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -526,7 +541,7 @@ const resendEmail = async (req, res) => {
       validationUrl,
     );
 
-    const session = await initializeSession(user.id, true);
+    const session = await initializeSession(user.id, true, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -621,7 +636,7 @@ const resetPassword = async (req, res) => {
     const user = userQ.rows[0];
 
     if (!user) {
-      return res.status(200).json({ error: "Invalid or expired token" });
+      return res.status(400).json({ error: "Invalid or expired token" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -674,7 +689,7 @@ const changeRole = async (req, res) => {
   const { userId, newRole } = req.body;
 
   if (!userId || !newRole) {
-    return res.status(200).json({ error: "Missing userId or newRole" });
+    return res.status(400).json({ error: "Missing userId or newRole" });
   }
 
   try {
@@ -685,7 +700,7 @@ const changeRole = async (req, res) => {
     );
     const user = userq.rows[0];
     if (!user) {
-      return res.status(200).json({ error: "User not found" });
+      return res.status(404).json({ error: "User not found" });
     }
 
     await pgClient.query(
@@ -720,13 +735,14 @@ const updateUserProfile = async (req, res) => {
 
     const fields = Object.keys(req.body).filter((f) => fieldMap[f]);
     const values = fields.map((f) => req.body[f]);
+    const columns = fields.map((f) => fieldMap[f]);
 
-    const setQuery = fields.map((f, i) => `${f} = $${i + 1}`).join(", ");
+    const setQuery = columns.map((col, i) => `${col} = $${i + 1}`).join(", ");
 
     const result = await pgClient.query(
       `UPDATE users 
        SET ${setQuery} 
-       WHERE id = $${fields.length + 1} 
+       WHERE id = $${columns.length + 1} 
        RETURNING id, first_name, last_name, email, username, phone, birth_date, country ,city ,country_code, interests, is_verified`,
       [...values, id],
     );
@@ -896,6 +912,11 @@ const deleteAcc = async (req, res) => {
 const changeEmail = async (req, res) => {
   const { oldEmail, newEmail } = req.body;
   try {
+    if (!oldEmail || !newEmail) {
+      return res
+        .status(400)
+        .json({ error: "oldEmail and newEmail are required" });
+    }
     const userQuery = await pgClient.query(
       `select * from users where email =$1 and id =$2`,
       [oldEmail, req.user.id],
@@ -903,7 +924,17 @@ const changeEmail = async (req, res) => {
     const user = userQuery.rows[0];
 
     if (!user) {
-      return res.status(200).json({ error: "User not Found" });
+      return res.status(404).json({ error: "User not Found" });
+    }
+
+    const existingEmailRes = await pgClient.query(
+      `select id from users where email = $1 and id != $2 limit 1`,
+      [newEmail.trim().toLowerCase(), req.user.id],
+    );
+    if (existingEmailRes.rows.length > 0) {
+      return res
+        .status(400)
+        .json({ error: "New email is already in use by another account" });
     }
 
     const existEventLog = await pgClient.query(
@@ -921,7 +952,7 @@ const changeEmail = async (req, res) => {
     }
 
     await pgClient.query(`update users set email =$1 where id=$2`, [
-      newEmail,
+      newEmail.trim().toLowerCase(),
       user.id,
     ]);
 
@@ -953,35 +984,64 @@ function countTimeForRecovery(deletedAt) {
 
 const completeData = async (req, res) => {
   const { id } = req.user;
-  const { phone, city, country, country_code, interests } = req.body;
+  const { phone, city, country, country_code, interests, birthdate, username } =
+    req.body;
 
   try {
-    if (!phone || !city || !country || !country_code || !interests) {
+    if (
+      !phone ||
+      !city ||
+      !country ||
+      !country_code ||
+      !birthdate ||
+      !username
+    ) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    const interestsArray = Array.isArray(interests) ? interests : (interests ? [interests] : []);
+    if (interestsArray.length === 0) {
+      return res.status(400).json({ error: "Please select at least one interest" });
+    }
+
     const userRes = await pgClient.query(
-      `update users set phone =$1 ,city=$2 ,country=$3 ,country_code=$4 ,interests=$5 where id=$6`,
-      [phone, city, country, country_code, JSON.stringify(interests || []), id],
+      `update users set phone =$1 ,city=$2 ,country=$3 ,country_code=$4 ,interests=$5 ,birth_date =$6 ,username=$7 where id=$8 returning *`,
+      [
+        String(phone).trim(),
+        String(city).trim(),
+        String(country).trim(),
+        String(country_code).trim(),
+        JSON.stringify(interestsArray),
+        String(birthdate).trim(),
+        String(username).trim(),
+        id,
+      ],
     );
 
     const user = userRes.rows[0];
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
     await pgClient.query(
       `update sessions set session_type = $1 where user_id =$2`,
       ["full", user.id],
     );
     res.status(200).json({
-      message: "User data Ccompleted successfully.",
+      message: "User data completed successfully.",
       user: user,
     });
-  } catch {
+  } catch (err) {
+    console.error("completeData error:", err.message, err.stack);
+    if (err.message && err.message.includes("value too long for type character varying")) {
+      return res.status(400).json({
+        error: "Phone number or another field is too long. Please use a shorter phone number (digits only, with country code, e.g. +201234567890).",
+      });
+    }
     return res
       .status(500)
       .json({ error: "Internal server error. Please try again later." });
   }
 };
-
-module.exports = { countTimeForRecovery };
 
 module.exports = {
   registerUser,

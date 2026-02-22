@@ -15,33 +15,40 @@ const fs = require("fs");
 
 // status
 
-async function insertImage(screenshot, from = "reports-screenshot") {
-  const file = screenshot;
-  const fileName = `screenshot-report-for-${topic}-from${user.id}.jpg`;
-  const { data, error } = await supabase.storage
+async function insertImage(file, topic, userId, from = "reports-screenshot") {
+  const fileName = `screenshot-report-for-${topic}-from-${userId}.jpg`;
+  const { error } = await supabase.storage
     .from(from)
     .upload(fileName, fs.readFileSync(file.path), {
       contentType: file.mimetype,
       upsert: true,
     });
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) throw new Error(error.message);
   fs.unlinkSync(file.path);
-  const { publicURL } = supabase.storage.from(from).getPublicUrl(fileName);
-
-  return publicURL;
+  const { publicUrl, publicURL } = supabase.storage.from(from).getPublicUrl(fileName);
+  return publicURL || publicUrl || "";
 }
 
 const makeReport = async (req, res) => {
-  const { email, screenshot, report, topic } = req.body;
-  const userId = req.reportUser.id;
+  const { email, report, topic } = req.body;
+  const screenshotFile = req.file;
+  const reportUser = req.reportUser;
+  const userId = reportUser?.id;
   try {
+    if (reportUser?.suspended) {
+      return res.status(403).json({
+        error: reportUser.forever
+          ? "Your account is permanently suspended. You cannot submit reports."
+          : "Your account is suspended. You cannot submit reports until the suspension ends.",
+      });
+    }
     if (!email || !report || !topic) {
       return res.status(400).json({ error: "missing required input" });
     }
     let publicURL = "";
 
-    if (screenshot) {
-      publicURL = insertImage(screenshot);
+    if (screenshotFile) {
+      publicURL = await insertImage(screenshotFile, topic, userId);
     }
 
     await pgClient.query(
@@ -60,7 +67,7 @@ const makeReport = async (req, res) => {
 const fetchReports = async (req, res) => {
   try {
     const reportRes = await pgClient.query(`select * from reports`);
-    const reports = reportRes.rows[0];
+    const reports = reportRes.rows;
     return res.status(200).json(reports);
   } catch (err) {
     return res
@@ -70,8 +77,11 @@ const fetchReports = async (req, res) => {
 };
 
 const fetchReportsByTopic = async (req, res) => {
-  const { topic } = req.body;
+  const topic = req.query.topic ?? req.body?.topic;
   try {
+    if (!topic) {
+      return res.status(400).json({ error: "topic query parameter is required" });
+    }
     const reportRes = await pgClient.query(
       `select * from reports where topic=$1`,
       [topic],

@@ -50,8 +50,6 @@ const passport = require("./config/passport.config.js");
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.use(bodyParser.json());
-
 // Auth routes
 app.use("/api", authRoutes);
 app.use("/api", registrationRoutes);

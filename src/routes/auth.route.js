@@ -84,8 +84,11 @@ router.post(
   async (req, res) => {
     try {
       const file = req.file;
+      if (!file || !file.path) {
+        return res.status(400).json({ error: "No file uploaded. Use field name 'profile_pic'." });
+      }
       const fileName = `user-${req.user.id}.jpg`;
-      const { data, error } = await supabase.storage
+      const { error } = await supabase.storage
         .from("profile-pics")
         .upload(fileName, fs.readFileSync(file.path), {
           contentType: file.mimetype,
@@ -93,16 +96,17 @@ router.post(
         });
       if (error) return res.status(500).json({ error: error.message });
       fs.unlinkSync(file.path);
-      const { publicURL } = supabase.storage
+      const { publicUrl, publicURL } = supabase.storage
         .from("profile-pics")
         .getPublicUrl(fileName);
+      const profilePicUrl = publicURL || publicUrl || "";
 
       await pgClient.query(
         "UPDATE users SET profile_pic_url = $1 WHERE id = $2",
-        [publicURL, req.user.id],
+        [profilePicUrl, req.user.id],
       );
 
-      res.status(200).json({ url: publicURL });
+      res.status(200).json({ url: profilePicUrl });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -131,6 +135,18 @@ router.get("/auth", authenticate, async (req, res) => {
 
     const certificates = certRes.rows;
 
+    const interests =
+      Array.isArray(u.interests) ? u.interests : typeof u.interests === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(u.interests);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+
     const profile = {
       userId: u.id,
       fullName:
@@ -139,6 +155,7 @@ router.get("/auth", authenticate, async (req, res) => {
         "",
       email: u.email || "",
       phone: u.phone || "",
+      birthDate: u.birth_date || null,
       registeredToTechnomaze: u.registered_to_technomaze || false,
       role: u.role || "user",
       isVerified: u.is_verified || false,
@@ -149,6 +166,7 @@ router.get("/auth", authenticate, async (req, res) => {
       city: u.city || "",
       country: u.country || "",
       profile_pic: u.profile_pic_url || "",
+      interests,
       redirect: redirect,
     };
 

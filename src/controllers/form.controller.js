@@ -173,8 +173,8 @@ const fetchRegistrations = async (req, res) => {
       `select * from registrations`,
     );
     const registrations = registerationRes.rows;
-    if (!registrations) {
-      return res.status(400).json({ message: "no regidtrations" });
+    if (!registrations.length) {
+      return res.status(200).json({ message: "no registrations", data: [] });
     }
     res.json(registrations);
   } catch (err) {
@@ -188,7 +188,7 @@ const deleteRegistration = async (req, res) => {
     const { id } = req.params;
 
     const registerationRes = await pgClient.query(
-      `delete from registrations where id =$1`,
+      `delete from registrations where id =$1 returning *`,
       [id],
     );
     const registration = registerationRes.rows[0];
@@ -196,16 +196,17 @@ const deleteRegistration = async (req, res) => {
     if (!registration) {
       return res.status(404).json({ error: "Registration not found" });
     }
-    const userRes = await pgClient.query(`select * from users where email=$1`, [
-      registration.email,
-    ]);
-    const user = userRes.rows[0];
-
-    if (user) {
-      await pgClient.query(
-        `update users set(registered_to_technomaze) values ($1) where email=$2 returning *`,
-        [false, registration.email],
-      );
+    if (registration.email) {
+      const userRes = await pgClient.query(`select * from users where email=$1`, [
+        registration.email,
+      ]);
+      const user = userRes.rows[0];
+      if (user) {
+        await pgClient.query(
+          `update users set registered_to_technomaze = $1 where email = $2`,
+          [false, registration.email],
+        );
+      }
     }
     res.json({ message: "Registration deleted successfully" });
   } catch (err) {
@@ -238,14 +239,16 @@ const updateRegisteration = async (req, res) => {
       teamCopoun,
     };
     const registrationRes = await pgClient.query(
-      `update registrations set(email,
-      full_name,
-      grade,
-      payment_method,
-      payment_phone,
-      phone,
-      school,
-      team_copoun) values ($1 ,$2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8) where id=$9 returning *`,
+      `update registrations set
+      email = $1,
+      full_name = $2,
+      grade = $3,
+      payment_method = $4,
+      payment_phone = $5,
+      phone = $6,
+      institution = $7,
+      team_copoun = $8
+      where id = $9 returning *`,
       [
         payload.email,
         payload.fullName,
@@ -260,11 +263,11 @@ const updateRegisteration = async (req, res) => {
     );
     const registration = registrationRes.rows[0];
     if (!registration) {
-      return res.status(200).json({ error: "Registration not found" });
+      return res.status(404).json({ error: "Registration not found" });
     }
     res.status(200).json({ message: "Registration updated successfully" });
   } catch (e) {
-    console.error("Update Registration Error:", err);
+    console.error("Update Registration Error:", e);
     res.status(500).json({ error: "Internal server error" });
   }
 };

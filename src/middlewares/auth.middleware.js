@@ -29,7 +29,11 @@ const authenticate = async (req, res, next) => {
       return res.status(400).json({ error: "Session expired or invalid" });
     }
 
-    if (session.session_type === "in-complete") {
+    // Allow in-complete sessions through for: (1) complete-data so they can submit the form,
+    // (2) GET /api/auth so the frontend can load user data and show the complete-profile page
+    const isCompleteDataRoute = req.originalUrl && req.originalUrl.includes("complete-data");
+    const isGetAuthRoute = req.method === "GET" && req.originalUrl && req.originalUrl.split("?")[0].endsWith("/auth");
+    if (session.session_type === "in-complete" && !isCompleteDataRoute && !isGetAuthRoute) {
       return res.status(200).json({ redirect: `redirect to complete-profile` });
     }
 
@@ -55,7 +59,7 @@ const authenticate = async (req, res, next) => {
     if (user.is_deleted === true) {
       if (countTimeForRecovery(user.deleted_at) <= 0) {
         await pgClient.query(
-          `update session set status ='expired' where id =$1`,
+          `update sessions set status ='expired' where id =$1`,
           [session.id],
         );
         return res.status(403).json({ error: "Account deleted permanently" });
@@ -107,7 +111,7 @@ const csrfCheck = async (req, res, next) => {
   const csrfToken = req.headers["x-csrf-token"];
   if (
     !csrfToken ||
-    csrfToken !== req.authSession?.csrfToken ||
+    csrfToken !== req.authSession?.csrf_token ||
     req.authSession.status !== "valid"
   ) {
     return res.status(403).json({ error: "CSRF token mismatch" });
