@@ -29,6 +29,10 @@ const authenticate = async (req, res, next) => {
       return res.status(400).json({ error: "Session expired or invalid" });
     }
 
+    if (session.session_type === "in-complete") {
+      return res.status(200).json({ redirect: `redirect to complete-profile` });
+    }
+
     const userQuery = `
     select * from users
     where id = $1`;
@@ -83,6 +87,10 @@ const authenticate = async (req, res, next) => {
         user.id,
       ]);
     }
+
+    // if(! user.country || ! user.city || ! user.birthDate || ! user.country_code || !user.username){
+    //   return res.status(403).json({error :`redirect to complete-profile`})
+    // }
 
     req.user = user;
     req.authSession = session;

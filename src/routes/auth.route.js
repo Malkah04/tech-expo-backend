@@ -123,6 +123,11 @@ router.get("/auth", authenticate, async (req, res) => {
       "select credential_id, certificate_url, title, issued_at from certificates where user_id = $1",
       [u.id],
     );
+    let redirect = false;
+    if (!u.city || !u.country || !u.country_code || !u.phone) {
+      console.log("rrrr");
+      redirect = true;
+    }
 
     const certificates = certRes.rows;
 
@@ -144,6 +149,7 @@ router.get("/auth", authenticate, async (req, res) => {
       city: u.city || "",
       country: u.country || "",
       profile_pic: u.profile_pic_url || "",
+      redirect: redirect,
     };
 
     res.set("Cache-Control", "no-store");
@@ -206,7 +212,7 @@ router.get(
   stopSuspendUser,
 
   async (req, res) => {
-    const session = await initializeSession(req.user.id, false);
+    let session = await initializeSession(req.user.id, false, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -233,6 +239,21 @@ router.get(
       !u.city ||
       !u.interests
     ) {
+      session = await initializeSession(req.user.id, false, "in-complete");
+      res.cookie("sessionToken", session.session_token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        maxAge: expiresInMs,
+      });
+
+      res.cookie("csrfToken", session.csrf_token, {
+        httpOnly: false,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        maxAge: expiresInMs,
+      });
+
       return res.redirect(`${host}/complete-profile`);
     }
     res.redirect(`${host}/dashboard`);
@@ -250,7 +271,7 @@ router.get(
   passport.authenticate("facebook", { failureRedirect: "/login" }),
   stopSuspendUser,
   async (req, res) => {
-    const session = await initializeSession(req.user.id, false);
+    const session = await initializeSession(req.user.id, false, "incomplete");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -299,7 +320,7 @@ router.get(
   passport.authenticate("github", { failureRedirect: "/login" }),
   stopSuspendUser,
   async (req, res) => {
-    const session = await initializeSession(req.user.id, false);
+    const session = await initializeSession(req.user.id, false, "incomplete");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {

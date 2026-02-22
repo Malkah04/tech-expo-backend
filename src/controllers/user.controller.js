@@ -166,7 +166,7 @@ const registerUser = async (req, res) => {
       }),
     );
 
-    const session = await initializeSession(newUser.id, false);
+    const session = await initializeSession(newUser.id, false, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -387,7 +387,7 @@ const loginUser = async (req, res) => {
       ]);
     }
 
-    const session = await initializeSession(user.id, rememberMe);
+    const session = await initializeSession(user.id, rememberMe, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
 
     res.cookie("sessionToken", session.session_token, {
@@ -966,6 +966,10 @@ const completeData = async (req, res) => {
     );
 
     const user = userRes.rows[0];
+    await pgClient.query(
+      `update sessions set session_type = $1 where user_id =$2`,
+      ["full", user.id],
+    );
     res.status(200).json({
       message: "User data Ccompleted successfully.",
       user: user,

@@ -22,7 +22,7 @@ const expireAllTokensForUser = async (userId) => {
   await pgClient.query(query, [userId]);
 };
 
-const initializeSession = async (userId, rememberMe) => {
+const initializeSession = async (userId, rememberMe, type) => {
   try {
     const sessionToken = await generateToken();
     const csrfToken = await generateToken();
@@ -40,11 +40,12 @@ const initializeSession = async (userId, rememberMe) => {
         user_id,
         session_token,
         csrf_token,
-        expires_at
-        ) values ($1 ,$2 ,$3 ,$4)
+        expires_at ,
+        session_type
+        ) values ($1 ,$2 ,$3 ,$4 ,$5)
          returning *`;
 
-    const insertValues = [userId, sessionToken, csrfToken, expiresAt];
+    const insertValues = [userId, sessionToken, csrfToken, expiresAt, type];
     const result = await pgClient.query(insertQuery, insertValues);
 
     return result.rows[0];
