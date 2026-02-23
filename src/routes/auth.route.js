@@ -80,26 +80,45 @@ const upload = multer({ dest: "uploads/" });
 router.post(
   "/auth/uploadProfilePic",
   authenticate,
-  upload.single("profile_pic"),
+  upload.any(),
   async (req, res) => {
     try {
-      const file = req.file;
+      const files = req.files || [];
+      const file =
+        files.find((f) => f.fieldname === "profile_pic") || files[0] || null;
+
       if (!file || !file.path) {
-        return res.status(400).json({ error: "No file uploaded. Use field name 'profile_pic'." });
+        return res
+          .status(400)
+          .json({ error: "No file uploaded. Expected field 'profile_pic'." });
       }
       const fileName = `user-${req.user.id}.jpg`;
       const { error } = await supabase.storage
-        .from("profile-pics")
+        .from("profile_pics")
         .upload(fileName, fs.readFileSync(file.path), {
           contentType: file.mimetype,
           upsert: true,
         });
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        console.error("Supabase upload profile pic error:", error);
+        return res
+          .status(500)
+          .json({ error: error.message || "Upload failed" });
+      }
       fs.unlinkSync(file.path);
-      const { publicUrl, publicURL } = supabase.storage
-        .from("profile-pics")
+
+      const { data: publicData, error: publicErr } = supabase.storage
+        .from("reports-screenshot")
         .getPublicUrl(fileName);
-      const profilePicUrl = publicURL || publicUrl || "";
+
+      if (publicErr) {
+        console.error("Supabase getPublicUrl error:", publicErr);
+        return res
+          .status(500)
+          .json({ error: publicErr.message || "Failed to get public URL" });
+      }
+
+      const profilePicUrl = publicData?.publicUrl || "";
 
       await pgClient.query(
         "UPDATE users SET profile_pic_url = $1 WHERE id = $2",
@@ -135,8 +154,9 @@ router.get("/auth", authenticate, async (req, res) => {
 
     const certificates = certRes.rows;
 
-    const interests =
-      Array.isArray(u.interests) ? u.interests : typeof u.interests === "string"
+    const interests = Array.isArray(u.interests)
+      ? u.interests
+      : typeof u.interests === "string"
         ? (() => {
             try {
               const parsed = JSON.parse(u.interests);
