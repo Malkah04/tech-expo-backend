@@ -12,6 +12,7 @@ const mongoose = require("mongoose");
 const Session = require("../models/session.model");
 const { pgClient } = require("../config/db.config.pg");
 const { json } = require("body-parser");
+const multer = require("multer");
 
 function generateVerificationToken() {
   const token = crypto.randomBytes(20).toString("hex");
@@ -129,7 +130,7 @@ const registerUser = async (req, res) => {
       is_deleted,
       deleted_at
     ) 
-    values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 ,false ,NULL)
+    values ($1 ,$2 ,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 ,$17,false ,NULL)
     returning *`;
 
     const insertValues = [
@@ -329,15 +330,24 @@ const loginUser = async (req, res) => {
       `select * from users where ${column} = $1 limit 1`,
       [identifierLower],
     );
-
     const user = userRes.rows[0];
+
+    const hasSession = await pgClient.query(
+      `select * from sessions where user_id =$1`,
+      [user.id],
+    );
+    if (hasSession.status === "valid") {
+      return res.status(200).json("you already login");
+    }
+
     if (!user) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     if (!user.password || typeof user.password !== "string") {
       return res.status(401).json({
-        error: "This account uses Google or another sign-in. Please use the same method to log in.",
+        error:
+          "This account uses Google or another sign-in. Please use the same method to log in.",
       });
     }
 
@@ -421,9 +431,10 @@ const loginUser = async (req, res) => {
   } catch (err) {
     console.error("Login error:", err.message, err.stack);
     return res.status(500).json({
-      error: err.message && err.message.includes("Illegal arguments")
-        ? "Invalid credentials. If you signed up with Google, please use Google to log in."
-        : "Internal server error",
+      error:
+        err.message && err.message.includes("Illegal arguments")
+          ? "Invalid credentials. If you signed up with Google, please use Google to log in."
+          : "Internal server error",
     });
   }
 };
@@ -719,33 +730,40 @@ const changeRole = async (req, res) => {
 const updateUserProfile = async (req, res) => {
   const { id } = req.user;
   try {
-    const fieldMap = {
-      firstname: "first_name",
-      lastname: "last_name",
-      phone: "phone",
-      email: "email",
-      username: "username",
-      birthDate: "birth_date",
-      country: "country",
-      city: "city",
-      country_code: "country_code",
-      interests: "interests",
-      isVerified: "is_verified",
-    };
+    console.log("BODY:", req.body);
+    console.log("FILE:", req.file);
 
-    const fields = Object.keys(req.body).filter((f) => fieldMap[f]);
-    const values = fields.map((f) => req.body[f]);
-    const columns = fields.map((f) => fieldMap[f]);
+    const interestsJson = JSON.stringify(req.body.interests || []);
 
-    const setQuery = columns.map((col, i) => `${col} = $${i + 1}`).join(", ");
+    const query = `
+      UPDATE users
+      SET first_name = $1,
+      last_name = $2,
+      phone = $3,
+      country = $4,
+      city = $5,
+      country_code = $6,
+      grade = $7,
+      school = $8,
+      interests = $9::json
+      WHERE id = $10
+      RETURNING *;
+`;
 
-    const result = await pgClient.query(
-      `UPDATE users 
-       SET ${setQuery} 
-       WHERE id = $${columns.length + 1} 
-       RETURNING id, first_name, last_name, email, username, phone, birth_date, country ,city ,country_code, interests, is_verified`,
-      [...values, id],
-    );
+    const values = [
+      req.body.firstName,
+      req.body.lastName,
+      req.body.phone,
+      req.body.country,
+      req.body.city,
+      req.body.countryCode,
+      req.body.grade,
+      req.body.school,
+      JSON.stringify(req.body.interests),
+      req.user.id,
+    ];
+
+    const result = await pgClient.query(query, values);
 
     const updatedUser = result.rows[0];
 
@@ -994,14 +1012,21 @@ const completeData = async (req, res) => {
       !country ||
       !country_code ||
       !birthdate ||
-      !username
+      !username ||
+      !interests
     ) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const interestsArray = Array.isArray(interests) ? interests : (interests ? [interests] : []);
+    const interestsArray = Array.isArray(interests)
+      ? interests
+      : interests
+        ? [interests]
+        : [];
     if (interestsArray.length === 0) {
-      return res.status(400).json({ error: "Please select at least one interest" });
+      return res
+        .status(400)
+        .json({ error: "Please select at least one interest" });
     }
 
     const userRes = await pgClient.query(
@@ -1032,9 +1057,13 @@ const completeData = async (req, res) => {
     });
   } catch (err) {
     console.error("completeData error:", err.message, err.stack);
-    if (err.message && err.message.includes("value too long for type character varying")) {
+    if (
+      err.message &&
+      err.message.includes("value too long for type character varying")
+    ) {
       return res.status(400).json({
-        error: "Phone number or another field is too long. Please use a shorter phone number (digits only, with country code, e.g. +201234567890).",
+        error:
+          "Phone number or another field is too long. Please use a shorter phone number (digits only, with country code, e.g. +201234567890).",
       });
     }
     return res
