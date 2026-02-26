@@ -334,7 +334,9 @@ const loginUser = async (req, res) => {
 
     if (!user) {
       // Deliberately generic to avoid leaking which part is wrong.
-      return res.status(401).json({ error: "Invalid email, username or password" });
+      return res
+        .status(401)
+        .json({ error: "Invalid email, username or password" });
     }
 
     const hasSessionRes = await pgClient.query(
@@ -424,6 +426,17 @@ const loginUser = async (req, res) => {
       sameSite: "none",
       maxAge: expiresInMs,
     });
+
+    if (user.role === "admin") {
+      try {
+        const { logActivityAsync } = require("../utils/activityLog");
+        logActivityAsync(user.id, "ADMIN_LOGIN", {
+          method: "password",
+          ip: req.ip,
+          userAgent: req.get("user-agent"),
+        });
+      } catch {}
+    }
 
     return res.status(200).json({
       message:
@@ -662,6 +675,14 @@ const resetPassword = async (req, res) => {
       [hashedPassword, user.id],
     );
 
+    try {
+      const { logActivityAsync } = require("../utils/activityLog");
+      logActivityAsync(user.id, "PASSWORD_RESET", {
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
+
     res.status(200).json({ message: "Password reset successful" });
   } catch (error) {
     console.error("Reset password error:", error);
@@ -723,6 +744,17 @@ const changeRole = async (req, res) => {
       update users set role =$1 where id=$2`,
       [newRole, userId],
     );
+
+    try {
+      const { logActivityAsync } = require("../utils/activityLog");
+      logActivityAsync(req.user.id, "ADMIN_CHANGE_ROLE", {
+        targetUserId: userId,
+        fromRole: user.role,
+        toRole: newRole,
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
 
     res.status(200).json({ message: "User role updated successfully" });
   } catch (error) {
@@ -860,6 +892,21 @@ const suspendUser = async (req, res) => {
         `UPDATE users SET status = 'suspend' WHERE id = $1`,
         [user.id],
       );
+
+      try {
+        const { logActivityAsync } = require("../utils/activityLog");
+        logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
+          targetUserId: user.id,
+          targetEmail: user.email,
+          status: "suspend",
+          suspendUntil: null,
+          unit: "forever",
+          reason: reason || null,
+          ip: req.ip,
+          userAgent: req.get("user-agent"),
+        });
+      } catch {}
+
       return res.status(200).json({ message: "User suspended forever" });
     }
     await pgClient.query(
@@ -869,6 +916,21 @@ const suspendUser = async (req, res) => {
     await pgClient.query(`UPDATE users SET status = 'suspend' WHERE id = $1`, [
       user.id,
     ]);
+
+    try {
+      const { logActivityAsync } = require("../utils/activityLog");
+      logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
+        targetUserId: user.id,
+        targetEmail: user.email,
+        status: "suspend",
+        amount: amount ?? null,
+        unit: unit ?? null,
+        reason: reason || null,
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
+
     return res.status(200).json({ message: "User suspended successfully" });
   } catch (err) {
     console.error(err);
@@ -902,6 +964,17 @@ const unSuspendUser = async (req, res) => {
     await pgClient.query(`UPDATE users SET status = 'active' WHERE id = $1`, [
       findUser.id,
     ]);
+
+    try {
+      const { logActivityAsync } = require("../utils/activityLog");
+      logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
+        targetUserId: findUser.id,
+        targetEmail: findUser.email,
+        status: "active",
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
 
     return res.status(200).json({ message: "User unsuspended successfully" });
   } catch (err) {
