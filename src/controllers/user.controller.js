@@ -364,6 +364,45 @@ const loginUser = async (req, res) => {
         .json({ error: "Invalid email, username or password" });
     }
 
+    // Check user-level suspension fields first
+    if (user.status === "suspend") {
+      const until = user.suspended_until || null;
+      const reason = user.suspension_reason || null;
+
+      const now = new Date();
+      if (!until || new Date(until) > now) {
+        try {
+          const { logActivityAsync } = require("../utils/activityLog");
+          logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
+            reason,
+            suspendUntil: until,
+            permanent: !until,
+            ip: req.ip,
+            userAgent: req.get("user-agent"),
+          });
+        } catch {}
+
+        return res.status(200).json({
+          status: "suspended",
+          suspendedUntil: until,
+          suspensionReason: reason,
+          error: !until
+            ? "Your account has been suspended."
+            : `Your account has been suspended until ${until}.`,
+        });
+      }
+
+      // Suspension expired: reactivate
+      await pgClient.query(
+        `update users
+         set status = 'active',
+             suspended_until = NULL,
+             suspension_reason = NULL
+         where id = $1`,
+        [user.id],
+      );
+    }
+
     if (user.is_deleted === true) {
       const remainingDays = countTimeForRecovery(user.deleted_at);
       if (remainingDays <= 0) {
@@ -388,6 +427,7 @@ const loginUser = async (req, res) => {
       } catch {}
     }
 
+    // Legacy suspended_user table handling kept for backward compatibility
     const suspendRes = await pgClient.query(
       `select * from suspended_user where user_id = $1`,
       [user.id],
@@ -401,11 +441,15 @@ const loginUser = async (req, res) => {
           logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
             reason: suspend.reason || null,
             permanent: true,
+            legacyTable: true,
             ip: req.ip,
             userAgent: req.get("user-agent"),
           });
         } catch {}
         return res.status(200).json({
+          status: "suspended",
+          suspendedUntil: null,
+          suspensionReason: suspend.reason || null,
           error:
             "Your account has been suspended. Please contact support for more information.",
         });
@@ -418,11 +462,15 @@ const loginUser = async (req, res) => {
             reason: suspend.reason || null,
             suspendUntil: suspend.suspend_until,
             permanent: false,
+            legacyTable: true,
             ip: req.ip,
             userAgent: req.get("user-agent"),
           });
         } catch {}
         return res.status(200).json({
+          status: "suspended",
+          suspendedUntil: suspend.suspend_until,
+          suspensionReason: suspend.reason || null,
           error: `Your account has been suspended until ${suspend.suspend_until}. Please contact support for more information.`,
         });
       }
@@ -904,6 +952,15 @@ const suspendUser = async (req, res) => {
 
     // Prevent admins from suspending their own account
     if (req.user && user.id === req.user.id) {
+      try {
+        const { logActivityAsync } = require("../utils/activityLog");
+        logActivityAsync(user.id, "ADMIN_SUSPEND_SELF_DENIED", {
+          adminId: req.user.id,
+          adminEmail: req.user.email,
+          ip: req.ip,
+          userAgent: req.get("user-agent"),
+        });
+      } catch {}
       return res
         .status(400)
         .json({ error: "You cannot suspend your own admin account" });
@@ -923,15 +980,19 @@ const suspendUser = async (req, res) => {
         [user.id, reason],
       );
       await pgClient.query(
-        `UPDATE users SET status = 'suspend' WHERE id = $1`,
-        [user.id],
+        `UPDATE users
+         SET status = 'suspend',
+             suspended_until = NULL,
+             suspension_reason = $2
+         WHERE id = $1`,
+        [user.id, reason || null],
       );
 
       await expireAllTokensForUser(user.id);
 
       try {
         const { logActivityAsync } = require("../utils/activityLog");
-        logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
+      logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
           status: "suspend",
           suspendUntil: null,
           unit: "forever",
@@ -949,9 +1010,14 @@ const suspendUser = async (req, res) => {
       `insert into suspended_user (user_id ,suspend_until ,reason) values ($1 , now() + ($2 || ' ' || $3)::interval ,$4 ) `,
       [user.id, amount, unit, reason],
     );
-    await pgClient.query(`UPDATE users SET status = 'suspend' WHERE id = $1`, [
-      user.id,
-    ]);
+    await pgClient.query(
+      `UPDATE users
+       SET status = 'suspend',
+           suspended_until = now() + ($2 || ' ' || $3)::interval,
+           suspension_reason = $4
+       WHERE id = $1`,
+      [user.id, amount, unit, reason || null],
+    );
 
     await expireAllTokensForUser(user.id);
 

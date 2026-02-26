@@ -5,6 +5,9 @@ const {
   makeSuggestion,
   filter,
   getReportsOfUser,
+  getMyTickets,
+  getMyTicketById,
+  updateTicket,
 } = require("../controllers/report.controller");
 const { AuthReport } = require("../middlewares/report.midleware");
 const { authenticate } = require("../middlewares/auth.middleware.js");
@@ -36,6 +39,20 @@ router.get(
   authenticate,
   authorizeRoles("admin"),
   getReportsOfUser,
+);
+
+// User-facing: list own tickets
+router.get("/report/my", authenticate, getMyTickets);
+
+// User-facing: specific ticket, scoped to user_id
+router.get("/report/my/:ticketId", authenticate, getMyTicketById);
+
+// Admin: update ticket status / details
+router.put(
+  "/report/:ticketId",
+  authenticate,
+  authorizeRoles("admin"),
+  updateTicket,
 );
 
 module.exports = router;

@@ -7,6 +7,7 @@ const host = require("../utils/host");
 const { pgClient } = require("../config/db.config.pg");
 const multer = require("multer");
 const supabase = require("../config/supabase");
+const { logActivityAsync } = require("../utils/activityLog");
 
 const upload = multer({ dest: "uploads/screens" });
 const fs = require("fs");
@@ -50,12 +51,27 @@ const makeReport = async (req, res) => {
       publicURL = await insertImage(screenshot);
     }
 
-    await pgClient.query(
-      `insert into reports_and_suggestions (user_id ,screenshot_url , description,priority,category,specific_issue ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))`,
-      [userId, publicURL, description,priority, category, specific_issue],
+    const result = await pgClient.query(
+      `insert into reports_and_suggestions
+        (user_id ,screenshot_url , description,priority,category,specific_issue ,status ,type ,ticket_id)
+       values ($1,$2,$3,$4 ,$5 ,$6 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))
+       returning *`,
+      [userId, publicURL, description, priority, category, specific_issue],
     );
 
-    return res.status(200).json({ message: "Report sent successfully" });
+    const ticket = result.rows[0];
+
+    try {
+      logActivityAsync(userId, "TICKET_CREATED", {
+        ticketId: ticket.ticket_id,
+        type: "Report",
+        priority: ticket.priority,
+        category: ticket.category,
+        hasScreenshot: !!publicURL,
+      });
+    } catch {}
+
+    return res.status(200).json({ message: "Report sent successfully", ticket });
   } catch (err) {
     return res
       .status(500)
@@ -79,12 +95,27 @@ const makeSuggestion = async (req, res) => {
       publicURL = insertImage(screenshot);
     }
 
-    await pgClient.query(
-      `insert into reports_and_suggestions (user_id ,screenshot_url ,category,title ,description ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5,'in Progress','Suggestion' ,'TCK-' || nextval('ticket_seq'))`,
+    const result = await pgClient.query(
+      `insert into reports_and_suggestions
+        (user_id ,screenshot_url ,category,title ,description ,status ,type ,ticket_id)
+       values ($1,$2,$3,$4 ,$5,'in Progress','Suggestion' ,'TCK-' || nextval('ticket_seq'))
+       returning *`,
       [userId, publicURL, category, title, description],
     );
 
-    return res.status(200).json({ message: "suggestion sent successfully" });
+    const ticket = result.rows[0];
+
+    try {
+      logActivityAsync(userId, "TICKET_CREATED", {
+        ticketId: ticket.ticket_id,
+        type: "Suggestion",
+        priority: ticket.priority,
+        category: ticket.category,
+        hasScreenshot: !!publicURL,
+      });
+    } catch {}
+
+    return res.status(200).json({ message: "suggestion sent successfully", ticket });
   } catch (err) {
     console.error("makeSuggestion error:", err);
     return res
@@ -96,7 +127,14 @@ const makeSuggestion = async (req, res) => {
 const fetchReportsAndSuggestions = async (req, res) => {
   try {
     const reportRes = await pgClient.query(
-      ` select r.*, u.email from reports_and_suggestions r join users u on r.user_id = u.id`,
+      ` select
+          r.*,
+          u.first_name,
+          u.last_name,
+          u.username,
+          u.email as user_email
+        from reports_and_suggestions r
+        join users u on r.user_id = u.id`,
     );
 
     const reports = reportRes.rows;
@@ -173,8 +211,9 @@ const getReportsOfUser = async (req, res) => {
       FROM reports_and_suggestions r
       JOIN users u ON r.user_id = u.id
       WHERE r.user_id = $1
+      ORDER BY r.created_at DESC
       `,
-      [id]
+      [id],
     );
 
     if (result.rowCount === 0) {
@@ -188,6 +227,101 @@ const getReportsOfUser = async (req, res) => {
   }
 };
 
+const getMyTickets = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const result = await pgClient.query(
+      `
+      SELECT *
+      FROM reports_and_suggestions
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [userId],
+    );
+    return res.status(200).json(result.rows || []);
+  } catch (err) {
+    console.error("getMyTickets error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const getMyTicketById = async (req, res) => {
+  const userId = req.user.id;
+  const { ticketId } = req.params;
+  try {
+    const result = await pgClient.query(
+      `
+      SELECT *
+      FROM reports_and_suggestions
+      WHERE user_id = $1 AND ticket_id = $2
+      LIMIT 1
+      `,
+      [userId, ticketId],
+    );
+
+    const ticket = result.rows[0];
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    return res.status(200).json(ticket);
+  } catch (err) {
+    console.error("getMyTicketById error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const updateTicket = async (req, res) => {
+  const { ticketId } = req.params;
+  const { status, replyMessage, internalNotes } = req.body || {};
+
+  try {
+    const existingRes = await pgClient.query(
+      `select * from reports_and_suggestions where ticket_id = $1 limit 1`,
+      [ticketId],
+    );
+    const existing = existingRes.rows[0];
+    if (!existing) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const nextStatus = status || existing.status;
+
+    const updateRes = await pgClient.query(
+      `
+      update reports_and_suggestions
+      set status = $1,
+          updated_at = NOW()
+      where ticket_id = $2
+      returning *
+      `,
+      [nextStatus, ticketId],
+    );
+
+    const ticket = updateRes.rows[0];
+
+    try {
+      logActivityAsync(existing.user_id, "TICKET_STATUS_UPDATED", {
+        ticketId,
+        fromStatus: existing.status,
+        toStatus: nextStatus,
+        adminId: req.user?.id || null,
+        adminEmail: req.user?.email || null,
+        replyMessage: replyMessage || null,
+        internalNotes: internalNotes || null,
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
+
+    return res.status(200).json(ticket);
+  } catch (err) {
+    console.error("updateTicket error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 
 // bgfopbjpf
 
@@ -197,4 +331,7 @@ module.exports = {
   makeSuggestion,
   filter,
   getReportsOfUser,
+  getMyTickets,
+  getMyTicketById,
+  updateTicket,
 };
