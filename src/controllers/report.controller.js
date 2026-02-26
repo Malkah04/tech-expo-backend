@@ -51,8 +51,8 @@ const makeReport = async (req, res) => {
     }
 
     await pgClient.query(
-      `insert into reports_and_suggestions (user_id ,screenshot_url , priority,category,specific_issue ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))`,
-      [userId, publicURL, priority, category, specific_issue],
+      `insert into reports_and_suggestions (user_id ,screenshot_url , description,priority,category,specific_issue ,status ,type ,ticket_id) values ($1,$2,$3,$4 ,$5 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))`,
+      [userId, publicURL, description,priority, category, specific_issue],
     );
 
     return res.status(200).json({ message: "Report sent successfully" });
@@ -86,6 +86,7 @@ const makeSuggestion = async (req, res) => {
 
     return res.status(200).json({ message: "suggestion sent successfully" });
   } catch (err) {
+    console.error("makeSuggestion error:", err);
     return res
       .status(500)
       .json({ error: "Internal server error. Please try again later." });
@@ -101,7 +102,7 @@ const fetchReportsAndSuggestions = async (req, res) => {
     const reports = reportRes.rows;
     return res.status(200).json(reports);
   } catch (err) {
-    console.error("Fetch reports error:", err);
+    console.error("fetchReportsAndSuggestions error:", err);
     return res
       .status(500)
       .json({ error: "Internal server error. Please try again later." });
@@ -168,18 +169,25 @@ const getReportsOfUser = async (req, res) => {
   try {
     const result = await pgClient.query(
       `
-        select * from reports_and_suggestions where user_id =$1`,
-      [id],
+      SELECT r.*, u.*
+      FROM reports_and_suggestions r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.user_id = $1
+      `,
+      [id]
     );
+
     if (result.rowCount === 0) {
       return res.status(200).json({ error: "no reports for this user" });
     }
+
     return res.status(200).json(result.rows);
   } catch (err) {
     console.error("Filter/Search error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 };
+
 
 // bgfopbjpf
 

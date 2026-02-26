@@ -332,22 +332,26 @@ const loginUser = async (req, res) => {
     );
     const user = userRes.rows[0];
 
-    const hasSession = await pgClient.query(
-      `select * from sessions where user_id =$1`,
-      [user.id],
-    );
-    if (hasSession.status === "valid") {
-      return res.status(200).json("you already login");
+    if (!user) {
+      // Deliberately generic to avoid leaking which part is wrong.
+      return res.status(401).json({ error: "Invalid email, username or password" });
     }
 
-    if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    const hasSessionRes = await pgClient.query(
+      `select * from sessions where user_id = $1 and status = 'valid' limit 1`,
+      [user.id],
+    );
+    const existingSession = hasSessionRes.rows[0] || null;
+    if (existingSession) {
+      return res.status(200).json({
+        message: "You are already logged in",
+      });
     }
 
     if (!user.password || typeof user.password !== "string") {
       return res.status(401).json({
         error:
-          "This account uses Google or another sign-in. Please use the same method to log in.",
+          "This account currently uses social login (e.g., Google or GitHub). Please sign in with your social provider or reset your password to create one.",
       });
     }
 

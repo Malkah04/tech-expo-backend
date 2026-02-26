@@ -17,8 +17,8 @@ const upload = multer({ dest: "uploads/screenshot" });
 
 router.get(
   "/report/fetch-reports",
-  // authenticate,
-  // authorizeRoles("admin"),
+  authenticate,
+  authorizeRoles("admin"),
   fetchReportsAndSuggestions,
 );
 
@@ -30,5 +30,12 @@ router.post(
 );
 router.post("/report/filter", authenticate, authorizeRoles("admin"), filter);
 router.post("/report/make-suggestion", AuthReport, makeSuggestion);
+
+router.get(
+  "/report/report-byuser",
+  authenticate,
+  authorizeRoles("admin"),
+  getReportsOfUser,
+);
 
 module.exports = router;

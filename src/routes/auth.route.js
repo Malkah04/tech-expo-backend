@@ -108,7 +108,7 @@ router.post(
       fs.unlinkSync(file.path);
 
       const { data: publicData, error: publicErr } = supabase.storage
-        .from("reports-screenshot")
+        .from("profile_pics")
         .getPublicUrl(fileName);
 
       if (publicErr) {
@@ -154,9 +154,8 @@ router.get("/auth", authenticate, async (req, res) => {
 
     const certificates = certRes.rows;
 
-    const interests = Array.isArray(u.interests)
-      ? u.interests
-      : typeof u.interests === "string"
+    const interests =
+      Array.isArray(u.interests) ? u.interests : typeof u.interests === "string"
         ? (() => {
             try {
               const parsed = JSON.parse(u.interests);
@@ -186,8 +185,10 @@ router.get("/auth", authenticate, async (req, res) => {
       city: u.city || "",
       country: u.country || "",
       profile_pic: u.profile_pic_url || "",
+      profilePicture: u.profile_pic_url || "",
       interests,
       redirect: redirect,
+      provider:u.providers
     };
 
     res.set("Cache-Control", "no-store");

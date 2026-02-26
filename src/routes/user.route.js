@@ -21,8 +21,20 @@ const {
 const {
   checkSuspension,
 } = require("../middlewares/chechsuspend.middleware.js");
+const {
+  getAccounts,
+  unlinkAccount,
+  getUserStatus,
+  updatePassword,
+} = require("../controllers/linkedAccounts.controller.js");
 
 router.use(checkSuspension);
+
+// Linked accounts & password management
+router.get("/user/accounts", authenticate, getAccounts);
+router.get("/user/status", authenticate, getUserStatus);
+router.post("/user/unlink", authenticate, unlinkAccount);
+router.post("/user/update-password", authenticate, updatePassword);
 
 router.post(
   "/add-admin-note",
