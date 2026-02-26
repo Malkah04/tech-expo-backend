@@ -4,10 +4,7 @@ const z = require("zod");
 
 // Validation schemas for admin notes
 const noteSchema = z.object({
-  email: z
-    .string()
-    .min(3, "Email is required")
-    .email("Invalid email address"),
+  email: z.string().min(3, "Email is required").email("Invalid email address"),
   note: z
     .string()
     .min(3, "Note must be at least 3 characters")
@@ -15,10 +12,7 @@ const noteSchema = z.object({
 });
 
 const emailOnlySchema = z.object({
-  email: z
-    .string()
-    .min(3, "Email is required")
-    .email("Invalid email address"),
+  email: z.string().min(3, "Email is required").email("Invalid email address"),
 });
 
 const noteIdSchema = z.object({
@@ -36,7 +30,9 @@ const addAdminNote = async (req, res) => {
   try {
     const parsed = noteSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+      return res
+        .status(400)
+        .json({ error: "Invalid input", details: parsed.error.flatten() });
     }
 
     let { email, note } = parsed.data;
@@ -69,7 +65,9 @@ const fetchNoteForUser = async (req, res) => {
   try {
     const parsed = emailOnlySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+      return res
+        .status(400)
+        .json({ error: "Invalid input", details: parsed.error.flatten() });
     }
 
     let { email } = parsed.data;
@@ -106,7 +104,9 @@ const deleteNoteForUserbyId = async (req, res) => {
           : req.body?.noteId,
     });
     if (!parsed.success) {
-      return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+      return res
+        .status(400)
+        .json({ error: "Invalid input", details: parsed.error.flatten() });
     }
 
     const { noteId } = parsed.data;
