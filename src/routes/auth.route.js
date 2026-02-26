@@ -154,8 +154,9 @@ router.get("/auth", authenticate, async (req, res) => {
 
     const certificates = certRes.rows;
 
-    const interests =
-      Array.isArray(u.interests) ? u.interests : typeof u.interests === "string"
+    const interests = Array.isArray(u.interests)
+      ? u.interests
+      : typeof u.interests === "string"
         ? (() => {
             try {
               const parsed = JSON.parse(u.interests);
@@ -188,7 +189,7 @@ router.get("/auth", authenticate, async (req, res) => {
       profilePicture: u.profile_pic_url || "",
       interests,
       redirect: redirect,
-      provider:u.providers
+      provider: u.providers,
     };
 
     res.set("Cache-Control", "no-store");
@@ -210,12 +211,12 @@ router.post("/auth/logout", authenticate, async (req, res) => {
     res.clearCookie("sessionToken", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     });
     res.clearCookie("csrfToken", {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     });
     return res.status(200).json({ message: "Logged out" });
   } catch (e) {
