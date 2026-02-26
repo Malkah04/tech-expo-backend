@@ -1,6 +1,6 @@
 const User = require("../models/user.model");
 const bcrypt = require("bcrypt");
-const { initializeSession } = require("../utils/session");
+const { initializeSession, expireAllTokensForUser } = require("../utils/session");
 const isProduction = process.env.NODE_ENV === "production";
 const z = require("zod");
 const sendMail = require("../utils/email");
@@ -365,21 +365,27 @@ const loginUser = async (req, res) => {
     }
 
     if (user.is_deleted === true) {
-      if (countTimeForRecovery(user.deleted_at) <= 0) {
+      const remainingDays = countTimeForRecovery(user.deleted_at);
+      if (remainingDays <= 0) {
         return res.status(200).json({
           error:
             "The recovery period for this account has expired. It cannot be restored",
         });
       }
 
-      console.log("here");
-
       const restoredRes = await pgClient.query(
         `update users set is_deleted = false, deleted_at = NULL ,status='active' where id = $1 returning *`,
         [user.id],
       );
 
-      console.log(restoredRes.rows[0]);
+      try {
+        const { logActivityAsync } = require("../utils/activityLog");
+        logActivityAsync(user.id, "ACCOUNT_RECOVERED", {
+          daysRemaining: remainingDays,
+          ip: req.ip,
+          userAgent: req.get("user-agent"),
+        });
+      } catch {}
     }
 
     const suspendRes = await pgClient.query(
@@ -390,14 +396,34 @@ const loginUser = async (req, res) => {
     const suspend = suspendRes.rows[0];
     if (suspend) {
       if (!suspend.suspend_until) {
-        return res
-          .status(200)
-          .json({ error: "Your account is permanently suspended" });
+        try {
+          const { logActivityAsync } = require("../utils/activityLog");
+          logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
+            reason: suspend.reason || null,
+            permanent: true,
+            ip: req.ip,
+            userAgent: req.get("user-agent"),
+          });
+        } catch {}
+        return res.status(200).json({
+          error:
+            "Your account has been suspended. Please contact support for more information.",
+        });
       }
 
       if (new Date(suspend.suspend_until) > new Date()) {
+        try {
+          const { logActivityAsync } = require("../utils/activityLog");
+          logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
+            reason: suspend.reason || null,
+            suspendUntil: suspend.suspend_until,
+            permanent: false,
+            ip: req.ip,
+            userAgent: req.get("user-agent"),
+          });
+        } catch {}
         return res.status(200).json({
-          error: `Account suspended until ${suspend.suspend_until}`,
+          error: `Your account has been suspended until ${suspend.suspend_until}. Please contact support for more information.`,
         });
       }
 
@@ -747,10 +773,11 @@ const changeRole = async (req, res) => {
 
     try {
       const { logActivityAsync } = require("../utils/activityLog");
-      logActivityAsync(req.user.id, "ADMIN_CHANGE_ROLE", {
-        targetUserId: userId,
+      logActivityAsync(userId, "ADMIN_CHANGE_ROLE", {
         fromRole: user.role,
         toRole: newRole,
+        adminId: req.user?.id || null,
+        adminEmail: req.user?.email || null,
         ip: req.ip,
         userAgent: req.get("user-agent"),
       });
@@ -875,6 +902,13 @@ const suspendUser = async (req, res) => {
       return res.status(404).json({ error: "No user found" });
     }
 
+    // Prevent admins from suspending their own account
+    if (req.user && user.id === req.user.id) {
+      return res
+        .status(400)
+        .json({ error: "You cannot suspend your own admin account" });
+    }
+
     const checkifUserSuspended = await pgClient.query(
       `select * from suspended_user where user_id =$1 `,
       [user.id],
@@ -893,15 +927,17 @@ const suspendUser = async (req, res) => {
         [user.id],
       );
 
+      await expireAllTokensForUser(user.id);
+
       try {
         const { logActivityAsync } = require("../utils/activityLog");
-        logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
-          targetUserId: user.id,
-          targetEmail: user.email,
+        logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
           status: "suspend",
           suspendUntil: null,
           unit: "forever",
           reason: reason || null,
+          adminId: req.user?.id || null,
+          adminEmail: req.user?.email || null,
           ip: req.ip,
           userAgent: req.get("user-agent"),
         });
@@ -917,15 +953,17 @@ const suspendUser = async (req, res) => {
       user.id,
     ]);
 
+    await expireAllTokensForUser(user.id);
+
     try {
       const { logActivityAsync } = require("../utils/activityLog");
-      logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
-        targetUserId: user.id,
-        targetEmail: user.email,
+      logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
         status: "suspend",
         amount: amount ?? null,
         unit: unit ?? null,
         reason: reason || null,
+        adminId: req.user?.id || null,
+        adminEmail: req.user?.email || null,
         ip: req.ip,
         userAgent: req.get("user-agent"),
       });
@@ -967,10 +1005,10 @@ const unSuspendUser = async (req, res) => {
 
     try {
       const { logActivityAsync } = require("../utils/activityLog");
-      logActivityAsync(req.user.id, "ADMIN_UPDATE_USER_STATUS", {
-        targetUserId: findUser.id,
-        targetEmail: findUser.email,
+      logActivityAsync(findUser.id, "ADMIN_UPDATE_USER_STATUS", {
         status: "active",
+        adminId: req.user?.id || null,
+        adminEmail: req.user?.email || null,
         ip: req.ip,
         userAgent: req.get("user-agent"),
       });
@@ -986,7 +1024,13 @@ const unSuspendUser = async (req, res) => {
 const deleteAcc = async (req, res) => {
   try {
     const userRes = await pgClient.query(
-      `update users set is_deleted =$1 ,deleted_at = NOW() ,status='suspend'  where id =$2 returning *`,
+      `update users
+       set is_deleted = $1,
+           deleted_at = NOW(),
+           status = 'suspend',
+           providers = '[]'::jsonb
+       where id = $2
+       returning *`,
       [true, req.user.id],
     );
 
@@ -994,6 +1038,18 @@ const deleteAcc = async (req, res) => {
     if (!deletedUser) {
       return res.status(404).json({ message: "user not exist" });
     }
+
+    await expireAllTokensForUser(deletedUser.id);
+
+    try {
+      const { logActivityAsync } = require("../utils/activityLog");
+      logActivityAsync(deletedUser.id, "ACCOUNT_SOFT_DELETE", {
+        reason: "user_self_delete",
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+    } catch {}
+
     return res.status(200).json({ message: "user deleted successfully" });
   } catch (err) {
     return res
