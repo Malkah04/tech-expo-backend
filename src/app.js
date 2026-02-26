@@ -12,6 +12,7 @@ const emailRoutes = require("./routes/email.route.js");
 const certificateRoute = require("./routes/certificate.route.js");
 const userRoutes = require("./routes/user.route.js");
 const reportRoutes = require("./routes/reports.route.js");
+const activityLogsRoutes = require("./routes/activityLogs.route.js");
 const expressSession = require("express-session");
 const pgSession = require("connect-pg-simple")(expressSession);
 const { Pool } = require("pg");
@@ -61,5 +62,6 @@ app.use("/api", certificateRoute);
 app.use("/api", userRoutes);
 
 app.use("/api", reportRoutes);
+app.use("/api", activityLogsRoutes);
 
 module.exports = app;
