@@ -1,6 +1,7 @@
 const bcrypt = require("bcrypt");
 const { pgClient } = require("../config/db.config.pg");
 const { expireAllTokensForUser } = require("../utils/session");
+const { logActivityAsync } = require("../utils/activityLog");
 
 const ALLOWED_PROVIDERS = ["apple", "google", "github"];
 
@@ -9,7 +10,9 @@ function normalizeProviders(raw) {
   return raw
     .map((p) => {
       if (!p) return null;
-      const provider = (p.provider ?? p.Provider ?? p.name ?? "").toString().toLowerCase();
+      const provider = (p.provider ?? p.Provider ?? p.name ?? "")
+        .toString()
+        .toLowerCase();
       if (!provider) return null;
       return {
         ...p,
@@ -113,6 +116,12 @@ const unlinkAccount = async (req, res) => {
     const updatedAccounts = pickAllowedProvidersList(updatedProviders);
     const updatedHasPassword = !!updated.password;
 
+    logActivityAsync(req.user.id, "UNLINK_ACCOUNT", {
+      provider,
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
     return res.status(200).json({
       success: true,
       accounts: updatedAccounts,
@@ -150,23 +159,22 @@ const updatePassword = async (req, res) => {
 
       await expireAllTokensForUser(user.id);
 
-      return res
-        .status(200)
-        .json({ success: true, hasPassword: true });
+      logActivityAsync(req.user.id, "PASSWORD_SET", {
+        ip: req.ip,
+        userAgent: req.get("user-agent"),
+      });
+
+      return res.status(200).json({ success: true, hasPassword: true });
     }
 
     // Scenario B: existing password -> oldPassword is strictly required
     if (!rawOld) {
-      return res
-        .status(400)
-        .json({ error: "Current password is required" });
+      return res.status(400).json({ error: "Current password is required" });
     }
 
     const isMatch = await bcrypt.compare(rawOld, user.password);
     if (!isMatch) {
-      return res
-        .status(400)
-        .json({ error: "Current password is incorrect" });
+      return res.status(400).json({ error: "Current password is incorrect" });
     }
 
     const hashedPassword = await bcrypt.hash(rawNew, 10);
@@ -177,9 +185,12 @@ const updatePassword = async (req, res) => {
 
     await expireAllTokensForUser(user.id);
 
-    return res
-      .status(200)
-      .json({ success: true, hasPassword: true });
+    logActivityAsync(req.user.id, "PASSWORD_CHANGE", {
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    return res.status(200).json({ success: true, hasPassword: true });
   } catch (error) {
     console.error("updatePassword error:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -192,4 +203,3 @@ module.exports = {
   getUserStatus,
   updatePassword,
 };
-
