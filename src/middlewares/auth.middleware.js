@@ -7,10 +7,26 @@ const { countTimeForRecovery } = require("../controllers/user.controller.js");
 const authenticate = async (req, res, next) => {
   const { sessionToken } = req.cookies;
   if (!sessionToken || typeof sessionToken !== "string") {
-    return res.status(400).json({ error: "Unauthorized" });
+    if (process.env.NODE_ENV !== "test") {
+      console.warn("[auth] missing sessionToken cookie", {
+        method: req.method,
+        url: req.originalUrl,
+        origin: req.headers.origin,
+      });
+    }
+    return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
+    if (process.env.NODE_ENV !== "test") {
+      console.info("[auth] authenticate start", {
+        method: req.method,
+        url: req.originalUrl,
+        origin: req.headers.origin,
+        tokenPrefix: sessionToken.slice(0, 8),
+      });
+    }
+
     const searchQuery = `
     select * from sessions
     where session_token = $1
@@ -26,14 +42,34 @@ const authenticate = async (req, res, next) => {
         secure: process.env.NODE_ENV === "production",
         sameSite: "none",
       });
-      return res.status(400).json({ error: "Session expired or invalid" });
+      if (process.env.NODE_ENV !== "test") {
+        console.warn("[auth] invalid/expired session", {
+          method: req.method,
+          url: req.originalUrl,
+          origin: req.headers.origin,
+          tokenPrefix: sessionToken.slice(0, 8),
+        });
+      }
+      return res.status(401).json({ error: "Session expired or invalid" });
     }
 
     // Allow in-complete sessions through for: (1) complete-data, (2) GET /api/auth, (3) GET /api/report/* (admin fetch reports)
-    const isCompleteDataRoute = req.originalUrl && req.originalUrl.includes("complete-data");
-    const isGetAuthRoute = req.method === "GET" && req.originalUrl && req.originalUrl.split("?")[0].endsWith("/auth");
-    const isReportRoute = req.method === "GET" && req.originalUrl && req.originalUrl.includes("/report/");
-    if (session.session_type === "in-complete" && !isCompleteDataRoute && !isGetAuthRoute && !isReportRoute) {
+    const isCompleteDataRoute =
+      req.originalUrl && req.originalUrl.includes("complete-data");
+    const isGetAuthRoute =
+      req.method === "GET" &&
+      req.originalUrl &&
+      req.originalUrl.split("?")[0].endsWith("/auth");
+    const isReportRoute =
+      req.method === "GET" &&
+      req.originalUrl &&
+      req.originalUrl.includes("/report/");
+    if (
+      session.session_type === "in-complete" &&
+      !isCompleteDataRoute &&
+      !isGetAuthRoute &&
+      !isReportRoute
+    ) {
       return res.status(200).json({ redirect: `redirect to complete-profile` });
     }
 
@@ -98,6 +134,15 @@ const authenticate = async (req, res, next) => {
 
     req.user = user;
     req.authSession = session;
+    if (process.env.NODE_ENV !== "test") {
+      console.info("[auth] authenticate ok", {
+        method: req.method,
+        url: req.originalUrl,
+        userId: user.id,
+        role: user.role,
+        sessionType: session.session_type,
+      });
+    }
     return next();
   } catch (error) {
     console.error("Authentication error:", error);
