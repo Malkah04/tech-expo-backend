@@ -38,25 +38,88 @@ async function insertImage(file, from = "reports-screenshot") {
 
 //report -> level , specific issue ,category , description ,screenshot
 const makeReport = async (req, res) => {
-  const { description, category, priority, specific_issue } = req.body;
-  const userId = req.reportUser.id;
+  const {
+    description,
+    category,
+    priority,
+    specific_issue,
+    type = "Report",
+  } = req.body;
+
+  const reportUser = req.reportUser || {};
+  const userId = reportUser.id;
+  const userStatus = reportUser.status || null;
+  const isSuspended = !!reportUser.suspended;
+
   const screenshot = req.file;
+
   try {
     if (!category || !description || !priority) {
       return res.status(400).json({ error: "missing required input" });
     }
+
+    // Special handling: Suspension Appeal tickets
+    const isSuspensionAppeal =
+      String(category).toLowerCase() === "suspension appeal" ||
+      String(type).toLowerCase() === "suspension appeal";
+
+    if (isSuspended) {
+      // Suspended users may only file suspension appeals
+      if (!isSuspensionAppeal) {
+        return res.status(403).json({
+          error:
+            "Your account is suspended. You can only submit a Suspension Appeal ticket.",
+          code: "SUSPENDED_ONLY_APPEAL_ALLOWED",
+        });
+      }
+
+      // Enforce one active suspension appeal at a time
+      const activeAppealRes = await pgClient.query(
+        `
+        select 1
+        from reports_and_suggestions
+        where user_id = $1
+          and lower(category) = 'suspension appeal'
+          and lower(coalesce(type, '')) in ('report', 'suspension appeal')
+          and lower(status) in ('open', 'in progress', 'pending')
+        limit 1
+        `,
+        [userId],
+      );
+
+      if (activeAppealRes.rows[0]) {
+        return res.status(400).json({
+          error:
+            "You already have a pending appeal. Please wait for an admin to review it.",
+          code: "SUSPENSION_APPEAL_ALREADY_EXISTS",
+        });
+      }
+    }
+
     let publicURL = "";
 
     if (screenshot) {
       publicURL = await insertImage(screenshot);
     }
 
+    const ticketType = isSuspensionAppeal ? "Suspension Appeal" : "Report";
+
+    // Status uses the existing "in Progress" value to match the DB enum/check
+    // (the "one active appeal" rule is enforced by the query above).
     const result = await pgClient.query(
       `insert into reports_and_suggestions
-        (user_id ,screenshot_url , description,priority,category,specific_issue ,status ,type ,ticket_id)
-       values ($1,$2,$3,$4 ,$5 ,$6 ,'in Progress','Report', 'TCK-' || nextval('ticket_seq'))
+        (user_id, screenshot_url, description, priority, category, specific_issue, status, type, ticket_id)
+       values ($1,$2,$3,$4,$5,$6,'in Progress',$7,'TCK-' || nextval('ticket_seq'))
        returning *`,
-      [userId, publicURL, description, priority, category, specific_issue],
+      [
+        userId,
+        publicURL,
+        description,
+        priority,
+        category,
+        specific_issue,
+        ticketType,
+      ],
     );
 
     const ticket = result.rows[0];
@@ -64,15 +127,23 @@ const makeReport = async (req, res) => {
     try {
       logActivityAsync(userId, "TICKET_CREATED", {
         ticketId: ticket.ticket_id,
-        type: "Report",
+        type: ticket.type,
         priority: ticket.priority,
         category: ticket.category,
         hasScreenshot: !!publicURL,
+        userStatus,
+        isSuspensionAppeal,
       });
     } catch {}
 
-    return res.status(200).json({ message: "Report sent successfully", ticket });
+    return res.status(200).json({
+      message: isSuspensionAppeal
+        ? "Your suspension appeal has been submitted."
+        : "Report sent successfully",
+      ticket,
+    });
   } catch (err) {
+    console.error("makeReport error:", err);
     return res
       .status(500)
       .json({ error: "Internal server error. Please try again later." });

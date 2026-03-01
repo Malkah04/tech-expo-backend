@@ -110,16 +110,32 @@ const authenticate = async (req, res, next) => {
     const suspendRes = suspendUserRes.rows[0];
 
     if (suspendRes) {
-      if (!suspendRes.suspend_until) {
-        return res
-          .status(403)
-          .json({ error: "Your account is permanently suspended" });
-      }
-      if (new Date(suspendRes.suspend_until) > new Date()) {
+      const now = new Date();
+      const until = suspendRes.suspend_until || null;
+      const reason = suspendRes.reason || null;
+      const isoUntil = until ? new Date(until).toISOString() : null;
+
+      // Permanent suspension
+      if (!until) {
         return res.status(403).json({
-          error: `Account suspended until ${suspendRes.suspend_until}`,
+          error: "Your account is permanently suspended",
+          code: "ACCOUNT_SUSPENDED",
+          suspendedUntil: null,
+          reason,
         });
       }
+
+      // Active temporary suspension
+      if (new Date(until) > now) {
+        return res.status(403).json({
+          error: `Your account is suspended until ${isoUntil}`,
+          code: "ACCOUNT_SUSPENDED",
+          suspendedUntil: isoUntil,
+          reason,
+        });
+      }
+
+      // Suspension expired: clear legacy table + reactivate user
       await pgClient.query(`delete from suspended_user where user_id=$1 `, [
         user.id,
       ]);

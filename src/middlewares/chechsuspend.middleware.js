@@ -1,4 +1,5 @@
 const { pgClient } = require("../config/db.config.pg");
+const { URLSearchParams } = require("url");
 
 const host =
   process.env.NODE_ENV === "development"
@@ -48,7 +49,7 @@ const stopSuspendUser = async (req, res, next) => {
 
     const suspensionRes = await pgClient.query(
       `
-      SELECT suspend_until
+      SELECT suspend_until, reason
       FROM suspended_user
       WHERE user_id = $1
       ORDER BY created_at DESC
@@ -61,21 +62,71 @@ const stopSuspendUser = async (req, res, next) => {
 
     if (!suspension) return next();
 
-    if (suspension.suspend_until === null) {
-      //  return to page say your account is suspended , you can return it by .....
-      // return res.redirect(`${host}/dashboard`);
+    const until = suspension.suspend_until || null;
+    const reason = suspension.reason || null;
+    const now = new Date();
 
-      return res
-        .status(403)
-        .json({ error: "Your account is permanently suspended" });
+    // Decide if this request should be handled as a browser redirect
+    const originalUrl = req.originalUrl || "";
+    const acceptHeader = req.headers.accept || "";
+    const isSocialAuth =
+      originalUrl.includes("/auth/google") ||
+      originalUrl.includes("/auth/facebook") ||
+      originalUrl.includes("/auth/github");
+    const wantsHtml = acceptHeader.includes("text/html");
+
+    const redirectToSuspendedPage = () => {
+      const params = new URLSearchParams();
+
+      // Standardized error code for suspended accounts
+      params.set("error", "ACCOUNT_SUSPENDED");
+
+      if (until) {
+        const isoUntil = new Date(until).toISOString();
+        params.set("suspendedUntil", isoUntil);
+      }
+
+      if (reason) {
+        // URLSearchParams safely encodes spaces and special characters
+        params.set("reason", reason);
+      }
+
+      if (!until) {
+        params.set("permanent", "true");
+      }
+
+      const qs = params.toString();
+      const target = qs
+        ? `${host}/auth/suspended?${qs}`
+        : `${host}/auth/suspended`;
+
+      return res.redirect(target);
+    };
+
+    if (until === null) {
+      // Permanent suspension
+      if (isSocialAuth || wantsHtml) {
+        return redirectToSuspendedPage();
+      }
+      return res.status(403).json({
+        error: "Your account is permanently suspended",
+        code: "ACCOUNT_SUSPENDED",
+        suspendedUntil: null,
+        reason,
+      });
     }
 
-    if (new Date(suspension.suspend_until) > new Date()) {
-      //  return to page say your account is suspended , you can return it by .....
-      // return res.redirect(`${host}/dashboard`);
-
+    if (new Date(until) > now) {
+      // Active temporary suspension
+      const isoUntil = new Date(until).toISOString();
+      if (isSocialAuth || wantsHtml) {
+        return redirectToSuspendedPage();
+      }
       return res.status(403).json({
-        error: "Your account is suspended until " + suspension.suspend_until,
+        error: "Your account is suspended",
+        code: "ACCOUNT_SUSPENDED",
+        suspendedUntil: isoUntil,
+        reason,
       });
     }
 

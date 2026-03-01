@@ -382,13 +382,13 @@ const loginUser = async (req, res) => {
           });
         } catch {}
 
-        return res.status(200).json({
-          status: "suspended",
-          suspendedUntil: until,
-          suspensionReason: reason,
+        return res.status(403).json({
           error: !until
             ? "Your account has been suspended."
             : `Your account has been suspended until ${until}.`,
+          code: "ACCOUNT_SUSPENDED",
+          suspendedUntil: until,
+          reason,
         });
       }
 
@@ -435,43 +435,46 @@ const loginUser = async (req, res) => {
 
     const suspend = suspendRes.rows[0];
     if (suspend) {
-      if (!suspend.suspend_until) {
+      const until = suspend.suspend_until || null;
+      const reason = suspend.reason || null;
+
+      if (!until) {
         try {
           const { logActivityAsync } = require("../utils/activityLog");
           logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
-            reason: suspend.reason || null,
+            reason,
             permanent: true,
             legacyTable: true,
             ip: req.ip,
             userAgent: req.get("user-agent"),
           });
         } catch {}
-        return res.status(200).json({
-          status: "suspended",
-          suspendedUntil: null,
-          suspensionReason: suspend.reason || null,
+        return res.status(403).json({
           error:
             "Your account has been suspended. Please contact support for more information.",
+          code: "ACCOUNT_SUSPENDED",
+          suspendedUntil: null,
+          reason,
         });
       }
 
-      if (new Date(suspend.suspend_until) > new Date()) {
+      if (new Date(until) > new Date()) {
         try {
           const { logActivityAsync } = require("../utils/activityLog");
           logActivityAsync(user.id, "LOGIN_BLOCKED_SUSPENDED", {
-            reason: suspend.reason || null,
-            suspendUntil: suspend.suspend_until,
+            reason,
+            suspendUntil: until,
             permanent: false,
             legacyTable: true,
             ip: req.ip,
             userAgent: req.get("user-agent"),
           });
         } catch {}
-        return res.status(200).json({
-          status: "suspended",
-          suspendedUntil: suspend.suspend_until,
-          suspensionReason: suspend.reason || null,
-          error: `Your account has been suspended until ${suspend.suspend_until}. Please contact support for more information.`,
+        return res.status(403).json({
+          error: `Your account has been suspended until ${until}. Please contact support for more information.`,
+          code: "ACCOUNT_SUSPENDED",
+          suspendedUntil: until,
+          reason,
         });
       }
 
