@@ -50,65 +50,16 @@
         overflow: hidden;
       }
 
-      .header::before {
-        content: "";
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(
-          circle,
-          rgba(255, 255, 255, 0.1) 0%,
-          transparent 70%
-        );
-        animation: rotate 20s linear infinite;
-      }
-
-      @keyframes rotate {
-        0% {
-          transform: rotate(0deg);
-        }
-        100% {
-          transform: rotate(360deg);
-        }
-      }
-
-      .logo {
-        width: 80px;
-        height: 80px;
-        background: rgba(255, 255, 255, 0.15);
-        border-radius: 20px;
-        margin: 0 auto 20px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        position: relative;
-        z-index: 2;
-        backdrop-filter: blur(10px);
-      }
-
-      .logo::after {
-        content: "✓";
-        font-size: 36px;
-        color: white;
-        font-weight: bold;
-      }
-
       .header h1 {
         color: white;
         font-size: 28px;
         font-weight: 700;
         margin-bottom: 10px;
-        position: relative;
-        z-index: 2;
       }
 
       .header p {
         color: rgba(255, 255, 255, 0.9);
         font-size: 16px;
-        position: relative;
-        z-index: 2;
       }
 
       .content {
@@ -129,50 +80,22 @@
         margin-bottom: 35px;
       }
 
-      .verify-button {
-        display: inline-block;
-        background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
-        color: white;
-        text-decoration: none;
-        padding: 16px 32px;
+      /* OTP Input */
+      .otp-container {
+        text-align: center;
+        margin: 30px 0;
+      }
+
+      .otp-input {
+        font-size: 24px;
+        padding: 12px 15px;
         border-radius: 12px;
-        font-weight: 600;
-        font-size: 16px;
+        border: 1px solid rgba(59, 130, 246, 0.3);
         text-align: center;
-        transition: all 0.3s ease;
-        box-shadow: 0 10px 25px rgba(29, 78, 216, 0.3);
-        position: relative;
-        overflow: hidden;
-      }
-
-      .verify-button::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: -100%;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(
-          90deg,
-          transparent,
-          rgba(255, 255, 255, 0.2),
-          transparent
-        );
-        transition: left 0.5s;
-      }
-
-      .verify-button:hover::before {
-        left: 100%;
-      }
-
-      .verify-button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 15px 35px rgba(29, 78, 216, 0.4);
-      }
-
-      .button-container {
-        text-align: center;
-        margin: 35px 0;
+        width: 150px;
+        letter-spacing: 8px;
+        background: rgba(30, 64, 175, 0.1);
+        color: #f1f5f9;
       }
 
       .divider {
@@ -184,32 +107,6 @@
           transparent
         );
         margin: 35px 0;
-      }
-
-      .alternative {
-        background: rgba(30, 64, 175, 0.1);
-        border: 1px solid rgba(59, 130, 246, 0.2);
-        border-radius: 12px;
-        padding: 25px;
-        margin: 25px 0;
-      }
-
-      .alternative h3 {
-        color: #f1f5f9;
-        font-size: 16px;
-        margin-bottom: 15px;
-      }
-
-      .copy-link {
-        background: rgba(30, 64, 175, 0.2);
-        border: 1px solid rgba(59, 130, 246, 0.3);
-        border-radius: 8px;
-        padding: 12px;
-        font-family: "Monaco", "Menlo", monospace;
-        font-size: 13px;
-        color: #93c5fd;
-        word-break: break-all;
-        line-height: 1.5;
       }
 
       .warning {
@@ -239,37 +136,7 @@
         margin-bottom: 15px;
       }
 
-      .social-links {
-        display: flex;
-        justify-content: center;
-        gap: 15px;
-        margin-top: 20px;
-      }
-
-      .social-link {
-        width: 40px;
-        height: 40px;
-        background: rgba(148, 163, 184, 0.1);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-decoration: none;
-        color: #94a3b8;
-        transition: all 0.3s ease;
-      }
-
-      .social-link:hover {
-        background: rgba(29, 78, 216, 0.3);
-        color: #93c5fd;
-        transform: translateY(-2px);
-      }
-
       @media (max-width: 600px) {
-        body {
-          padding: 10px;
-        }
-
         .email-container {
           margin: 0;
           border-radius: 15px;
@@ -281,13 +148,8 @@
           padding: 25px 20px;
         }
 
-        .header h1 {
-          font-size: 24px;
-        }
-
-        .verify-button {
-          display: block;
-          margin: 0 auto;
+        .otp-input {
+          width: 100%;
         }
       }
     </style>
@@ -303,50 +165,35 @@
         <div class="greeting">Hello {{firstName}},</div>
 
         <div class="message">
-          Thanks for signing up! We're excited to have you on board. To complete
-          your registration and secure your account, please verify your email
-          address by clicking the button below.
+          Thanks for signing up! To complete your registration, please enter
+          the 4-digit code we sent to your email below.
         </div>
 
-        <div class="button-container">
-          <a href="{{validationUrl}}" class="verify-button">
-            Verify My Email Address
-          </a>
+        <!-- OTP input field -->
+        <div class="otp-container">
+          <input
+            type="text"
+            class="otp-input"
+            placeholder="Enter 4-digit code"
+            maxlength="4"
+            readonly
+            value="{{otpCode}}"
+          />
         </div>
 
         <div class="divider"></div>
 
-        <div class="alternative">
-          <h3>Having trouble with the button?</h3>
-          <p style="color: #94a3b8; font-size: 14px; margin-bottom: 15px">
-            Copy and paste this link into your browser:
-          </p>
-          <div class="copy-link">{{validationUrl}}</div>
-        </div>
-
         <div class="warning">
           <p>
-            <strong>⚠️ Important:</strong> This verification link will expire in
-            30 minutes for security reasons. If you didn't create this account,
-            you can safely ignore this email.
+            ⚠️ This code will expire in 30 minutes. If you didn't create this
+            account, you can safely ignore this email.
           </p>
         </div>
       </div>
 
       <div class="footer">
         <p>This email was sent to {{email}}</p>
-
-        <div
-          style="
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px solid rgba(59, 130, 246, 0.2);
-          "
-        >
-          <p style="color: #60a5fa; font-size: 12px">
-            © 2024 Tech Expo. All rights reserved.
-          </p>
-        </div>
+        <p style="color: #60a5fa; font-size: 12px">© 2024 Tech Expo. All rights reserved.</p>
       </div>
     </div>
   </body>

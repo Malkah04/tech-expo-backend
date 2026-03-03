@@ -1,6 +1,9 @@
 const User = require("../models/user.model");
 const bcrypt = require("bcrypt");
-const { initializeSession, expireAllTokensForUser } = require("../utils/session");
+const {
+  initializeSession,
+  expireAllTokensForUser,
+} = require("../utils/session");
 const isProduction = process.env.NODE_ENV === "production";
 const z = require("zod");
 const sendMail = require("../utils/email");
@@ -57,6 +60,7 @@ const registerUser = async (req, res) => {
 
     return res.status(400).json({ error: parsed.error.flatten() });
   }
+  console.log("paresed", parsed);
 
   const {
     firstName,
@@ -84,6 +88,7 @@ const registerUser = async (req, res) => {
 
     const checkRes = await pgClient.query(checkQuery, checkValue);
     const user = checkRes.rows;
+    console.log("her", user);
 
     const activeEmail = user.find(
       (u) => u.email === normalizedEmail && u.is_deleted === false,
@@ -105,6 +110,7 @@ const registerUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    console.log("herre", hashedPassword);
 
     const { token, hashedToken, expires } = generateVerificationToken();
 
@@ -141,7 +147,7 @@ const registerUser = async (req, res) => {
       hashedPassword,
       phone,
       birthDate,
-      JSON.stringify(interests || []),
+      JSON.stringify(interests || ["web"]),
       true,
       subscribeNewsletter || false,
       false,
@@ -155,17 +161,31 @@ const registerUser = async (req, res) => {
 
     const result = await pgClient.query(insertQuery, insertValues);
     const newUser = result.rows[0];
+    console.log("new user", newUser);
 
     const validationUrl = `${host}/verify?token=${token}`;
-    sendMail(
-      newUser.email,
-      "Verify your email",
-      loadTemplate("verification.html", {
-        firstName: newUser.first_name,
-        email: newUser.email,
-        validationUrl,
-      }),
-    );
+    try {
+      const otpCode = generateOTP();
+      console.log("Generated OTP:", otpCode);
+
+      await pgClient.query(
+        `insert into emails (email, verification_code, sent, sent_at) values($1, $2, $3, $4)`,
+        [newUser.email, otpCode, true, new Date()],
+      );
+
+      console.log("send email");
+      sendMail(
+        newUser.email,
+        "Verify your email",
+        loadTemplate("verification.html", {
+          firstName: newUser.first_name,
+          email: newUser.email,
+          otpCode,
+        }),
+      );
+    } catch (err) {
+      console.error("OTP generation or email insert failed:", err);
+    }
 
     const session = await initializeSession(newUser.id, false, "full");
     const expiresInMs = session.expires_at.getTime() - Date.now();
@@ -189,6 +209,7 @@ const registerUser = async (req, res) => {
       csrfToken: session.csrf_token,
       validationBeforeLogin: newUser.validate_before_login,
       email: newUser.email,
+      verificationToken: token,
     });
   } catch (error) {
     console.error("Registration error:", error);
@@ -535,6 +556,7 @@ const loginUser = async (req, res) => {
 
 const verifyEmail = async (req, res) => {
   let { token } = req.query;
+  let { otp } = req.query;
   if (!token || typeof token !== "string") {
     return res.status(400).json({ error: "Invalid or expired token" });
   }
@@ -559,6 +581,21 @@ const verifyEmail = async (req, res) => {
       return res.status(200).json({ message: "Email already verified" });
     }
 
+    const otpRes = await pgClient.query(
+      `select * from emails where verification_code =$1 and email =$2`,
+      [otp, user.email],
+    );
+    if (otpRes.rowCount === 0) {
+      return res.status(200).json({ error: "Invalid OTP" });
+    }
+    if (otpRes.rows[0].verified) {
+      return res.status(200).json({ message: "Email already verified" });
+    }
+
+    await pgClient.query(
+      `update emails set verified= true where email=$1 and verification_code=$2 `,
+      [user.email, otp],
+    );
     await pgClient.query(
       `
       update users set 
@@ -601,7 +638,7 @@ const verifyEmail = async (req, res) => {
 };
 
 const resendEmail = async (req, res) => {
-  const { email } = req.body;
+  const { email, otp } = req.body;
 
   try {
     const result = await pgClient.query(
@@ -635,15 +672,29 @@ const resendEmail = async (req, res) => {
     );
 
     const validationUrl = `${host}/verify?token=${token}`;
-    await sendMail(
-      user.email,
+    const otpCode = generateOTP();
+    const HasOtp = await pgClient.query(`select * from emails where email=$1`, [
+      email,
+    ]);
+    const hasotp = HasOtp.rows[0];
+    if (hasotp) {
+      await pgClient.query(
+        `update emails set verification_code =$1 where email =$2 `,
+        [otpCode, email],
+      );
+    }
+    await pgClient.query(
+      `insert into emails (email , verification_code ,send ,send_at) values($1,$2,$3,$4)`,
+      [newUser.email, otpCode, true, new Date()],
+    );
+    sendMail(
+      newUser.email,
       "Verify your email",
       loadTemplate("verification.html", {
-        firstName: user.first_name,
-        email: user.email,
-        validationUrl,
+        firstName: newUser.first_name,
+        email: newUser.email,
+        otpCode,
       }),
-      validationUrl,
     );
 
     const session = await initializeSession(user.id, true, "full");
@@ -995,7 +1046,7 @@ const suspendUser = async (req, res) => {
 
       try {
         const { logActivityAsync } = require("../utils/activityLog");
-      logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
+        logActivityAsync(user.id, "ADMIN_UPDATE_USER_STATUS", {
           status: "suspend",
           suspendUntil: null,
           unit: "forever",

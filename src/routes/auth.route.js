@@ -201,7 +201,7 @@ router.get("/auth", authenticate, async (req, res) => {
       .json({ error: "There was an error authenticating your session" });
   }
 });
-router.post("/auth/logout", authenticate, async (req, res) => {
+router.post("/auth/logout", async (req, res) => {
   try {
     await pgClient.query(
       `
